@@ -1,0 +1,613 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  READER
+  AUTHOR
+  TRANSLATOR
+  ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+enum StoryStatus {
+  ONGOING
+  COMPLETED
+  HIATUS
+}
+
+enum TransactionType {
+  DEPOSIT
+  UNLOCK
+  DONATE
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum ReadingListStatus {
+  READING    // Đang đọc
+  PLAN       // Đọc sau
+  DROPPED    // Bỏ dở
+  COMPLETED  // Đã đọc xong
+}
+
+enum ReportReason {
+  WRONG_CHAPTER   // Sai chương / nhảy chương
+  MISSING_CONTENT // Thiếu nội dung
+  DUPLICATE       // Trùng chương
+  WRONG_STORY     // Sai truyện
+  OTHER           // Lý do khác
+}
+
+enum ChapterStatus {
+  DRAFT     // tác giả đang soạn
+  PENDING   // chờ admin duyệt
+  APPROVED  // đã duyệt & hiển thị
+  REJECTED  // bị từ chối
+}
+
+enum RoleRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum WithdrawStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  REJECTED
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  displayId      Int       @unique @default(autoincrement()) // ID ngắn hiển thị cho user
+  email          String    @unique
+  name           String?
+  avatar         String?
+  bio            String?   @db.Text
+  gender         Gender?
+  hometown       String?   @db.VarChar(100)
+  facebookUrl    String?   @db.VarChar(255)
+  tiktokUrl      String?   @db.VarChar(255)
+  instagramUrl   String?   @db.VarChar(255)
+  passwordHash   String?
+  coinBalance    Int       @default(0)
+  role           Role      @default(READER)
+  createdAt      DateTime  @default(now())
+
+  // Ban system
+  isBanned       Boolean   @default(false)
+  bannedAt       DateTime?
+  banReason      String?
+  banExpiry      DateTime? // null = vĩnh viễn
+
+  // Rank / XP system
+  xp             Int       @default(0)
+  level          Int       @default(1)
+  followerCount  Int       @default(0) // denormalized for fast reads
+
+  readingHistory  ReadingHistory[]
+  bookmarks       Bookmark[]
+  transactions    Transaction[]
+  comments        Comment[]
+  ratings         Rating[]
+  readingLists    ReadingList[]
+  reports         ChapterReport[]
+  paymentRequests PaymentRequest[]
+  commentLikes    CommentLike[]
+  notifications   Notification[]
+  roleRequests    RoleRequest[]
+  withdrawRequests WithdrawRequest[]
+  ownedStories    Story[]          @relation("StoryOwner")
+
+  // Follow system
+  myFollows       AuthorFollow[]   @relation("Follower")
+  myFollowers     AuthorFollow[]   @relation("Author")
+
+  // Coin transfer
+  coinsSent       CoinTransfer[]   @relation("CoinSender")
+  coinsReceived   CoinTransfer[]   @relation("CoinReceiver")
+
+  @@index([role])
+  @@index([isBanned])
+  @@index([xp])
+  @@map("users")
+}
+
+model Story {
+  id          String      @id @default(cuid())
+  title       String
+  slug        String      @unique
+  description String?
+  coverUrl    String?
+  author      String?
+  status      StoryStatus @default(ONGOING)
+  sourceUrl      String?
+  sourceName     String?
+  sourceAuthor   String?  // (dịch giả) tên tác giả gốc
+  sourceLanguage String?  // (dịch giả) ngôn ngữ gốc
+  viewCount      Int         @default(0)
+  rating         Float       @default(0)
+  ratingCount    Int         @default(0)
+  isFeatured     Boolean     @default(false)
+  ownerId        String?     // userId của tác giả/dịch giả
+  ownerType      String?     // "AUTHOR" | "TRANSLATOR"
+  commissionRate Int         @default(70)  // % hoa hồng cho owner
+  totalEarnings  Int         @default(0)   // tổng xu đã kiếm
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  chapters       Chapter[]
+  genres         StoryGenre[]
+  bookmarks      Bookmark[]
+  readingHistory ReadingHistory[]
+  comments       Comment[]
+  ratings        Rating[]
+  readingLists   ReadingList[]
+  owner          User?       @relation("StoryOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+
+  @@index([slug])
+  @@index([status])
+  @@index([createdAt])
+  @@index([viewCount])
+  @@index([isFeatured])
+  @@index([rating])
+  crawlSchedule CrawlSchedule?
+
+  @@index([ownerId])
+  @@map("stories")
+}
+
+model Chapter {
+  id          String   @id @default(cuid())
+  storyId     String
+  chapterNum  Int
+  title       String?
+  content     String
+  wordCount   Int      @default(0)
+  isLocked      Boolean       @default(false)
+  coinCost      Int           @default(0)
+  sourceUrl     String?
+  publishStatus ChapterStatus @default(DRAFT)
+  rejectReason  String?       // lý do từ chối (khi REJECTED)
+  submittedAt   DateTime?     // thời điểm submit duyệt
+  publishedAt   DateTime      @default(now())
+  createdAt     DateTime      @default(now())
+
+  story          Story             @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  readingHistory ReadingHistory[]
+  unlockedBy     UnlockedChapter[]
+  reports        ChapterReport[]
+
+  @@unique([storyId, chapterNum])
+  @@index([storyId])
+  @@index([storyId, chapterNum])
+  @@map("chapters")
+}
+
+model Genre {
+  id   String @id @default(cuid())
+  name String @unique
+  slug String @unique
+
+  stories StoryGenre[]
+
+  @@map("genres")
+}
+
+model StoryGenre {
+  storyId String
+  genreId String
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  genre Genre @relation(fields: [genreId], references: [id], onDelete: Cascade)
+
+  @@id([storyId, genreId])
+  @@map("story_genres")
+}
+
+model ReadingHistory {
+  userId         String
+  storyId        String
+  lastChapterId  String?
+  lastChapterNum Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  story   Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  chapter Chapter? @relation(fields: [lastChapterId], references: [id])
+
+  @@id([userId, storyId])
+  @@map("reading_history")
+}
+
+model Bookmark {
+  userId    String
+  storyId   String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, storyId])
+  @@map("bookmarks")
+}
+
+model UnlockedChapter {
+  userId     String
+  chapterId  String
+  unlockedAt DateTime @default(now())
+
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@id([userId, chapterId])
+  @@map("unlocked_chapters")
+}
+
+model Transaction {
+  id          String            @id @default(cuid())
+  userId      String
+  type        TransactionType
+  amount      Int
+  coinAmount  Int
+  status      TransactionStatus @default(PENDING)
+  provider    String?
+  providerRef String?
+  meta        Json?
+  createdAt   DateTime          @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("transactions")
+}
+
+model Comment {
+  id        String   @id @default(cuid())
+  userId    String
+  storyId   String
+  parentId  String?  // null = root comment, có giá trị = reply
+  content   String   @db.Text
+  likeCount Int      @default(0)
+  isPinned  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  story   Story         @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  parent  Comment?      @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies Comment[]     @relation("CommentReplies")
+  likes   CommentLike[]
+
+  @@index([storyId, createdAt])
+  @@index([storyId, parentId, createdAt])  // replies query
+  @@index([parentId])
+  @@index([userId, createdAt])             // user comment history
+  @@map("comments")
+}
+
+model CommentLike {
+  userId    String
+  commentId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@id([userId, commentId])
+  @@map("comment_likes")
+}
+
+
+// ─── New Models ────────────────────────────────────────────────────────────────
+
+model Rating {
+  userId    String
+  storyId   String
+  score     Int      // 1-5
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, storyId])
+  @@map("ratings")
+}
+
+model ReadingList {
+  userId    String
+  storyId   String
+  status    ReadingListStatus @default(READING)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, storyId])
+  @@map("reading_lists")
+}
+
+model ChapterReport {
+  id        String       @id @default(cuid())
+  userId    String
+  chapterId String
+  reason    ReportReason
+  note      String?
+  resolved  Boolean      @default(false)
+  createdAt DateTime     @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+
+  @@index([chapterId])
+  @@index([resolved])
+  @@map("chapter_reports")
+}
+
+// Key-value store cho site settings (payment info, etc.)
+model Setting {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
+
+enum PaymentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model PaymentRequest {
+  id            String        @id @default(cuid())
+  userId        String
+  packageCoins  Int
+  packagePrice  Int
+  method        String        // "bank" | "momo" | "vnpay"
+  transactionId String?       // user's transaction reference
+  note          String?
+  status        PaymentStatus @default(PENDING)
+  adminNote     String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("payment_requests")
+}
+
+
+// ─── Author / Translator System ──────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  message   String   @db.Text
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model RoleRequest {
+  id          String            @id @default(cuid())
+  userId      String
+  requestRole Role
+  reason      String            @db.Text
+  portfolio   String?
+  status      RoleRequestStatus @default(PENDING)
+  adminNote   String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("role_requests")
+}
+
+model WithdrawRequest {
+  id          String         @id @default(cuid())
+  userId      String
+  coins       Int
+  fee         Int
+  netCoins    Int
+  method      String
+  accountInfo String         @db.Text
+  status      WithdrawStatus @default(PENDING)
+  adminNote   String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+  @@map("withdraw_requests")
+}
+
+// --- Crawl Scheduler ---------------------------------------------------------
+
+model CrawlSchedule {
+  id              String    @id @default(cuid())
+  storyId         String    @unique
+  sourceUrl       String
+  intervalMinutes Int       @default(30)
+  isActive        Boolean   @default(true)
+  lastChapterNum  Int       @default(0)
+  lastRunAt       DateTime?
+  nextRunAt       DateTime?
+  lastError       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+
+  @@index([nextRunAt])
+  @@index([isActive])
+  @@map("crawl_schedules")
+}
+
+// --- Crawl Log (lịch sử chạy crawler) ---------------------------------------
+
+model CrawlLog {
+  id               String    @id @default(cuid())
+  scheduleId       String?   // null nếu chạy thủ công
+  storyId          String?
+  storyTitle       String?
+  sourceUrl        String
+  startedAt        DateTime  @default(now())
+  finishedAt       DateTime?
+  status           String    @default("running") // "running" | "success" | "no_new" | "error"
+  chaptersImported Int       @default(0)
+  chaptersTotal    Int       @default(0)
+  errorMessage     String?   @db.Text
+  triggeredBy      String    @default("auto") // "auto" | "manual"
+
+  @@index([storyId, startedAt])
+  @@index([startedAt])
+  @@index([status])
+  @@map("crawl_logs")
+}
+
+// --- Site Config (CSS selectors per domain) ----------------------------------
+
+model SiteConfig {
+  id                String   @id @default(cuid())
+  domain            String   @unique
+  name              String
+  titleSelector     String?
+  authorSelector    String?
+  coverSelector     String?
+  descSelector      String?
+  genreSelector     String?
+  chapterListSel    String?
+  chapterContentSel String?
+  chapterTitleSel   String?
+  nextPageSel       String?
+  // Chapter list API (for AJAX-based pagination like /get/listchap/{storyId}?page={page})
+  chapterApiUrl     String?  // URL template, e.g. /get/listchap/{storyId}?page={page}
+  storyIdPattern    String?  // Regex to extract storyId from page HTML, e.g. page\((\d+)
+  chapterApiJson    String?  // JSON field containing HTML, e.g. "data" for {data: "<html>"}
+  // Cloudflare / Anti-bot bypass
+  cookies           String?  @db.Text  // Cookie string: "cf_clearance=xxx; _ga=..."
+  notes             String?  @db.Text
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("site_configs")
+}
+
+// --- Banned Words (từ cấm trong bình luận) -----------------------------------
+
+model BannedWord {
+  id        String   @id @default(cuid())
+  word      String   @unique
+  isActive  Boolean  @default(true)
+  hitCount  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([isActive])
+  @@map("banned_words")
+}
+
+// --- Author Follow (theo dõi tác giả/dịch giả) --------------------------------
+
+model AuthorFollow {
+  id         String   @id @default(cuid())
+  followerId String
+  authorId   String
+  createdAt  DateTime @default(now())
+
+  follower User @relation("Follower", fields: [followerId], references: [id], onDelete: Cascade)
+  author   User @relation("Author",   fields: [authorId],   references: [id], onDelete: Cascade)
+
+  @@unique([followerId, authorId])
+  @@index([followerId])
+  @@index([authorId])
+  @@map("author_follows")
+}
+
+// --- Coin Transfer (chuyển xu giữa users) ------------------------------------
+
+model CoinTransfer {
+  id         String   @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  amount     Int
+  message    String?  @db.VarChar(200)
+  createdAt  DateTime @default(now())
+
+  fromUser User @relation("CoinSender",   fields: [fromUserId], references: [id], onDelete: Restrict)
+  toUser   User @relation("CoinReceiver", fields: [toUserId],   references: [id], onDelete: Restrict)
+
+  @@index([fromUserId, createdAt])
+  @@index([toUserId, createdAt])
+  @@map("coin_transfers")
+}
+
+// ─── Error Logging ───────────────────────────────────────────────────────────
+
+enum ErrorLevel {
+  INFO
+  WARN
+  ERROR
+  FATAL
+}
+
+model ErrorLog {
+  id        String     @id @default(cuid())
+  level     ErrorLevel @default(ERROR)
+  message   String
+  stack     String?    @db.Text
+  path      String?    @db.VarChar(500)
+  method    String?    @db.VarChar(10)
+  userId    String?
+  metadata  Json?
+  resolved  Boolean    @default(false)
+  resolvedAt DateTime?
+  createdAt DateTime   @default(now())
+
+  @@index([level, createdAt])
+  @@index([resolved, createdAt])
+  @@index([createdAt])
+  @@map("error_logs")
+}

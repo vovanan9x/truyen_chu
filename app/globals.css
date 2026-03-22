@@ -1,0 +1,158 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 24 100% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 24 100% 96%;
+    --accent-foreground: 24 100% 30%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 24 100% 50%;
+    --radius: 0.5rem;
+    --font-sans: 'Inter', system-ui, sans-serif;
+    --font-serif: 'Lora', Georgia, serif;
+  }
+
+  .dark {
+    --background: 222 47% 8%;
+    --foreground: 210 40% 98%;
+    --card: 222 47% 11%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 47% 11%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 24 100% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 24 80% 15%;
+    --accent-foreground: 24 100% 70%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 24 100% 55%;
+  }
+
+  .sepia {
+    --background: 35 50% 94%;
+    --foreground: 25 30% 20%;
+    --card: 35 50% 96%;
+    --card-foreground: 25 30% 20%;
+    --muted: 35 40% 88%;
+    --muted-foreground: 25 20% 45%;
+    --border: 35 30% 82%;
+    --input: 35 30% 82%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    transition: background-color 0.3s ease, color 0.3s ease;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-muted; }
+  ::-webkit-scrollbar-thumb { @apply bg-muted-foreground/30 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-muted-foreground/50; }
+}
+
+@layer components {
+  .story-card-hover {
+    @apply transition-all duration-300 hover:shadow-lg hover:-translate-y-1;
+  }
+
+  .gradient-primary {
+    background: linear-gradient(135deg, hsl(24, 100%, 50%), hsl(35, 100%, 55%));
+  }
+
+  .text-gradient {
+    background: linear-gradient(135deg, hsl(24, 100%, 45%), hsl(35, 100%, 50%));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .glass {
+    @apply bg-background/80 backdrop-blur-md border border-border/50;
+  }
+
+  .prose-reader {
+    font-family: var(--font-serif);
+    line-height: 1.8;
+    max-width: 720px;
+    margin: 0 auto;
+  }
+
+  .prose-reader p {
+    @apply mb-4 text-foreground/90;
+  }
+
+  .chapter-lock-blur {
+    background: linear-gradient(to bottom, transparent 0%, hsl(var(--background)) 80%);
+  }
+
+  /* HTML chapter content from crawlers */
+  .chapter-html-content p {
+    @apply mb-5 text-foreground/90 leading-relaxed;
+  }
+
+  .chapter-html-content br {
+    display: block;
+    margin-bottom: 0.5em;
+    content: '';
+  }
+
+  .chapter-html-content strong,
+  .chapter-html-content b {
+    @apply font-semibold text-foreground;
+  }
+
+  .chapter-html-content em,
+  .chapter-html-content i {
+    @apply italic;
+  }
+
+  .chapter-html-content blockquote {
+    @apply border-l-4 border-primary/40 pl-4 italic text-foreground/70 my-4;
+  }
+
+  .chapter-html-content h1, .chapter-html-content h2,
+  .chapter-html-content h3, .chapter-html-content h4 {
+    @apply font-semibold text-foreground mt-6 mb-3;
+  }
+
+  @keyframes slideInRight {
+    from { transform: translateX(100%); }
+    to   { transform: translateX(0); }
+  }
+  .animate-slide-in-right {
+    animation: slideInRight 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}

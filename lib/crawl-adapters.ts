@@ -1,0 +1,669 @@
+/**
+ * Site adapters for scraping different novel sites.
+ * Supports both hard-coded adapters and dynamic DB-configured selectors.
+ */
+
+import * as cheerio from 'cheerio'
+
+const FETCH_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+  'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.7',
+  'Cache-Control': 'no-cache',
+  'Pragma': 'no-cache',
+}
+
+export interface StoryInfo {
+  title: string
+  author: string
+  description: string
+  coverUrl: string
+  status: 'ONGOING' | 'COMPLETED' | 'HIATUS'
+  genres: string[]
+  totalChapters: number
+  sourceUrl: string
+}
+
+export interface ChapterRef {
+  num: number
+  title: string
+  url: string
+}
+
+export interface SiteAdapter {
+  name: string
+  matches(url: string): boolean
+  fetchStoryInfo(url: string, html: string): StoryInfo
+  fetchChapterList(url: string, html: string): { chapters: ChapterRef[]; nextPageUrl?: string }
+  fetchChapterContent(url: string, html: string): string
+  /** Optional: override full chapter list fetching (e.g. via AJAX API) */
+  fetchAllChapters?(storyUrl: string, html: string): Promise<ChapterRef[]>
+}
+
+// ─── Fetch helper ─────────────────────────────────────────────────────────────
+
+export async function fetchUrl(url: string, timeout = 15000, cookies?: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: {
+      ...FETCH_HEADERS,
+      ...(cookies ? { 'Cookie': cookies } : {}),
+    },
+    signal: AbortSignal.timeout(timeout),
+    redirect: 'follow',
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+  return res.text()
+}
+
+// ─── Helper: extract domain from URL ──────────────────────────────────────────
+
+function extractDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '')
+  } catch {
+    return url
+  }
+}
+
+// ─── Helper: extract clean HTML from chapter content ──────────────────────────
+// Keeps formatting tags (p, br, strong, em, etc.) but removes all dangerous/noise
+
+const ALLOWED_TAGS = new Set([
+  'p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'del',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'ul', 'ol', 'li', 'blockquote', 'hr', 'span', 'div',
+])
+
+export function extractCleanHtml($el: ReturnType<typeof cheerio.load>, selector: string): string {
+  const $ = $el
+  const el = $(selector).first()
+  if (!el.length) return ''
+
+  // Remove garbage elements
+  el.find('script, style, noscript, iframe, object, embed').remove()
+  el.find('[class*="ad"], [id*="ad"], [class*="banner"], [class*="social"]').remove()
+  el.find('[class*="related"], [class*="recommend"], [class*="comment"], [class*="share"]').remove()
+  el.find('nav, header, footer, .breadcrumb, button').remove()
+
+  // Get the inner HTML
+  let html = el.html() ?? ''
+
+  // Strip disallowed tags but keep their text content
+  html = html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)[^>]*>/g, (match, tagName) => {
+    const tag = tagName.toLowerCase()
+    if (!ALLOWED_TAGS.has(tag)) return ''
+    if (tag === 'br') return '<br>'
+    return match.replace(/\s+[a-zA-Z-]+="[^"]*"/g, '').replace(/\s+[a-zA-Z-]+='[^']*'/g, '')
+  })
+
+  // Normalize whitespace
+  html = html
+    .replace(/(<br\s*\/?>((\s*<br\s*\/?>){2,}))/gi, '<br><br>')
+    .replace(/(<p[^>]*>\s*<\/p>)+/gi, '')
+    .replace(/\s{3,}/g, ' ')
+    .trim()
+
+  return html
+}
+
+// ─── Helper: count words in HTML string ───────────────────────────────────────
+
+export function countWordsInHtml(html: string): number {
+  return html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean).length
+}
+
+// ─── Build a dynamic adapter from DB SiteConfig selectors ─────────────────────
+
+export interface DbSiteConfig {
+  domain: string
+  name: string
+  titleSelector?: string | null
+  authorSelector?: string | null
+  coverSelector?: string | null
+  descSelector?: string | null
+  genreSelector?: string | null
+  chapterListSel?: string | null
+  chapterContentSel?: string | null
+  chapterTitleSel?: string | null
+  nextPageSel?: string | null
+  // Chapter list API config (for AJAX pagination)
+  chapterApiUrl?: string | null    // e.g. /get/listchap/{storyId}?page={page}
+  storyIdPattern?: string | null   // regex to extract storyId, e.g. page\((\d+)
+  chapterApiJson?: string | null   // JSON field name, e.g. "data"
+  // Cloudflare / Anti-bot bypass
+  cookies?: string | null          // Cookie string: "cf_clearance=xxx; _ga=..."
+}
+
+// Per-domain cookie store
+const domainCookies = new Map<string, string>()
+
+/** Get cookies for a given URL's domain (for use in route handlers) */
+export function getCookiesForDomain(url: string): string | undefined {
+  try {
+    const domain = new URL(url).hostname.replace(/^www\./, '')
+    return domainCookies.get(domain) || undefined
+  } catch { return undefined }
+}
+
+function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
+  // Register cookies for this domain
+  if (cfg.cookies) domainCookies.set(cfg.domain, cfg.cookies)
+  else domainCookies.delete(cfg.domain)
+
+  const cookies = cfg.cookies || undefined
+  // Cookie-aware fetch for this domain
+  const fetch$ = (url: string, timeout = 15000) => fetchUrl(url, timeout, cookies)
+
+  return {
+    name: `${cfg.name} (custom)`,
+    matches: (url) => extractDomain(url) === cfg.domain,
+
+    // ── Story info ──────────────────────────────────────────────────────────────
+    fetchStoryInfo(url, html) {
+      const $ = cheerio.load(html)
+
+      let title = ''
+      if (cfg.titleSelector) title = $(cfg.titleSelector).first().text().trim()
+      if (!title) title = $('h1').first().text().trim()
+      if (!title) title = $('meta[property="og:title"]').attr('content')?.split(' - ')[0].trim() ?? ''
+      title = title.replace(/\s*[-|]\s*(Đọc Truyện|Truyện Chữ|Novel|[A-Z][a-z]+Chu|TruyenFull).*/i, '').trim()
+
+      let author = ''
+      if (cfg.authorSelector) author = $(cfg.authorSelector).first().text().trim()
+      if (!author) author = $('[itemprop="author"]').first().text().trim()
+      if (!author) author = $('meta[name="author"]').attr('content')?.trim() ?? ''
+      if (!author) {
+        const m = html.match(/tác giả[^>]*>[^<]*<[^>]+>([^<]{2,60})<\/a>/i)
+        author = m?.[1]?.trim() ?? ''
+      }
+
+      let description = ''
+      if (cfg.descSelector) description = $(cfg.descSelector).first().text().trim()
+      if (!description) description = $('meta[property="og:description"]').attr('content')?.trim() ?? ''
+      if (!description) description = $('meta[name="description"]').attr('content')?.trim() ?? ''
+
+      let coverUrl = ''
+      if (cfg.coverSelector) {
+        const el = $(cfg.coverSelector).first()
+        coverUrl = el.attr('src') || el.attr('data-src') || el.attr('data-lazy') || el.attr('data-original') || ''
+      }
+      if (!coverUrl) coverUrl = $('meta[property="og:image"]').attr('content') ?? '';
+      if (!coverUrl) {
+        ['[class*="cover"] img', '[class*="book"] img', 'figure img'].some(sel => {
+          const src = $(sel).first().attr('src') || $(sel).first().attr('data-src') || ''
+          if (src) { coverUrl = src; return true }
+        })
+      }
+      if (coverUrl.startsWith('//')) coverUrl = 'https:' + coverUrl
+      if (coverUrl && !coverUrl.startsWith('http')) {
+        try { coverUrl = new URL(coverUrl, url).toString() } catch { coverUrl = '' }
+      }
+
+      const genres: string[] = []
+      const genreSel = cfg.genreSelector || 'a[href*="the-loai"], a[href*="genre"], a[href*="category"], [itemprop="genre"]'
+      $(genreSel).each((_, el) => {
+        const g = $(el).text().trim()
+        if (g && g.length >= 2 && g.length <= 40 && !genres.includes(g)) genres.push(g)
+      })
+
+      const bodyText = $('body').text().toLowerCase()
+      const status: StoryInfo['status'] =
+        bodyText.includes('hoàn thành') || /\bfull\b/.test(bodyText) || bodyText.includes('đã hoàn') ? 'COMPLETED'
+        : bodyText.includes('tạm dừng') || bodyText.includes('hiatus') ? 'HIATUS'
+        : 'ONGOING'
+
+      let totalChapters = 0
+      if (cfg.chapterListSel) totalChapters = $(cfg.chapterListSel).length
+      if (!totalChapters) {
+        const countMatch = bodyText.match(/(\d+)\s*chương/)
+        if (countMatch) totalChapters = parseInt(countMatch[1])
+      }
+
+      return { title, author, description, coverUrl, genres, status, totalChapters, sourceUrl: url }
+    },
+
+    // ── Chapter list ────────────────────────────────────────────────────────────
+    fetchChapterList(url, html) {
+      const $ = cheerio.load(html)
+      const chapters: ChapterRef[] = []
+      const origin = new URL(url).origin
+
+      /**
+       * Extract chapter number from text/URL — position-independent:
+       * 1. URL: explicit chuong/chap/chapter + digit
+       * 2. Text: if exactly 1 number found → use it
+       * 3. Text: if multiple numbers → prefer the one adjacent to a chapter keyword (any order)
+       * 4. Text: fallback to first number
+       * 5. No number → null (caller uses list index)
+       */
+      function extractChapNum(text: string, href: string): number | null {
+        // 1. Explicit chapter number in URL
+        const urlNum = href.match(/(?:chuong|chapter|chap|tap|ep|phần|phan)[_-](\d+)/i)
+        if (urlNum) return parseInt(urlNum[1])
+
+        // 2. Scan all numbers from title
+        const t = text.normalize('NFC').trim()
+        const allNums = Array.from(t.matchAll(/(\d+)/g))
+        if (allNums.length === 0) return null
+        if (allNums.length === 1) return parseInt(allNums[0][1])
+
+        // 3. Multiple numbers — find one adjacent to a chapter keyword (before OR after)
+        //    e.g. "Vol 2 Chap 31" → 31; "Đệ 31 chương X" → 31; "Arc 1 Chapter 5" → 5
+        const kwPattern = /ch[uư][oô]ng|chapter|chap|t[aập]p|tap|ep|h[oồ]i|đ|đệ|đề|ti[eết]t|quy[eể]n|đột/gi
+        let bestNum: number | null = null
+        let bestDist = Infinity
+        for (const kw of Array.from(t.matchAll(kwPattern))) {
+          const kwStart = kw.index!
+          const kwEnd = kwStart + kw[0].length
+          for (const nm of allNums) {
+            const nmStart = nm.index!
+            const dist = Math.min(Math.abs(nmStart - kwEnd), Math.abs(kwStart - (nmStart + nm[1].length)))
+            if (dist < bestDist) {
+              bestDist = dist
+              bestNum = parseInt(nm[1])
+            }
+          }
+        }
+        if (bestNum !== null) return bestNum
+
+        // 4. No keyword found — return first number
+        return parseInt(allNums[0][1])
+      }
+
+      const sel = cfg.chapterListSel || 'a[href*="chuong"], a[href*="chapter"], a[href*="chap"], a[href*="tap"]'
+      $(sel).each((_, el) => {
+        const $a = $(el).is('a') ? $(el) : $(el).find('a').first()
+        if (!$a.length) return
+        const href = $a.attr('href') ?? ''
+        if (!href || href.startsWith('#') || href.startsWith('javascript')) return
+        const text = $a.attr('title') || $a.text().trim()
+        const num = extractChapNum(text, href)
+        if (num !== null && num > 0 && href) {
+          const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : new URL(href, url).toString()
+          if (!chapters.find(c => c.num === num)) {
+            chapters.push({ num, title: text || `Chương ${num}`, url: chUrl })
+          }
+        }
+      })
+
+      let nextPageUrl: string | undefined
+      if (cfg.nextPageSel) {
+        const nextHref = $(cfg.nextPageSel).attr('href')
+        if (nextHref && !nextHref.includes('javascript')) {
+          nextPageUrl = nextHref.startsWith('http') ? nextHref : origin + nextHref
+        }
+      }
+
+      chapters.sort((a, b) => a.num - b.num)
+      return { chapters, nextPageUrl }
+    },
+
+    // ── AJAX chapter list fetcher ───────────────────────────────────────────────
+    async fetchAllChapters(storyUrl: string, html: string): Promise<ChapterRef[]> {
+      const origin = new URL(storyUrl).origin
+
+      // Pattern 1: Config-driven AJAX API
+      const apiUrlTemplate = cfg.chapterApiUrl
+      if (apiUrlTemplate && apiUrlTemplate.includes('{page}')) {
+        let storyId: string | undefined
+        if (cfg.storyIdPattern) {
+          try {
+            const re = new RegExp(cfg.storyIdPattern)
+            storyId = html.match(re)?.[1]
+          } catch { /* invalid regex */ }
+        }
+        if (!storyId) {
+          storyId = html.match(/['"/]get\/listchap\/(\d+)['"?]/)?.[1]
+            || html.match(/listchap\/(\d+)/)?.[1]
+            || html.match(/page\s*\(\s*(\d+)/)?.[1]
+        }
+
+        if (storyId) {
+          const jsonField = cfg.chapterApiJson || 'data'
+          const chapters: ChapterRef[] = []
+          let page = 1
+          while (page <= 200) {
+            const apiUrl = (apiUrlTemplate.includes('{storyId}')
+              ? apiUrlTemplate.replace('{storyId}', storyId)
+              : apiUrlTemplate
+            ).replace('{page}', String(page))
+
+            const fullUrl = apiUrl.startsWith('http') ? apiUrl : origin + apiUrl
+            try {
+              const res = await fetch(fullUrl, {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                  'Accept': 'application/json, text/html, */*',
+                  'X-Requested-With': 'XMLHttpRequest',
+                  'Referer': storyUrl,
+                  ...(cookies ? { 'Cookie': cookies } : {}),
+                },
+                signal: AbortSignal.timeout(10000),
+              })
+              if (!res.ok) break
+              const rawText = await res.text()
+              let htmlContent = rawText
+              try {
+                const json = JSON.parse(rawText)
+                const fieldVal = json?.[jsonField]
+                if (fieldVal && typeof fieldVal === 'string') htmlContent = fieldVal
+              } catch { /* raw HTML */ }
+              if (!htmlContent || htmlContent.trim().length < 10) break
+
+
+              const prevCount = chapters.length
+              // Parse all chapter links — support both numbered and slug-only URLs
+              const $$ = cheerio.load(htmlContent)
+              $$('a[href]').each((idx, el) => {
+                const href = $$(el).attr('href') ?? ''
+                if (!href.includes('chuong') && !href.includes('chapter') && !href.includes('chap')) return
+                if (href === '#' || href.startsWith('javascript')) return
+                const text = $$(el).attr('title') || $$(el).text().trim()
+                const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : ''
+                if (!chUrl) return
+                if (chapters.find(c => c.url === chUrl)) return
+
+                // Try number from URL: /chuong-5-slug
+                let num: number | undefined
+                const urlNum = href.match(/(?:chuong|chapter|chap)[_-](\d+)/i)
+                if (urlNum) num = parseInt(urlNum[1])
+
+                // Try number from text: "Đề 5", "Chương 5", "Hồi 5"
+                if (!num) {
+                  const t = text.trim()
+                  const tm = t.match(/(?:Đệ|Đề|Đe|Hồi|Tiết|Quyển)\s*(\d+)/i)
+                    || t.match(/(?:ch[uư][oô]ng|chapter|chap|t[aậ]p)\s*[._-]?\s*(\d+)/i)
+                    || t.match(/^[#№]?(\d+)$/)
+                  if (tm) num = parseInt(tm[1])
+                }
+
+                // Fallback: use running count as chapter number
+                if (!num) num = chapters.length + 1
+
+                chapters.push({ num, title: text || `Chương ${num}`, url: chUrl })
+              })
+
+              if (page === 1 && chapters.length === 0) {
+                console.log(`[fetchAllChapters] page1 no chapters (raw ${rawText.length}b): ${rawText.slice(0,300)}`)
+              }
+              if (chapters.length === prevCount && page > 1) break
+              page++
+              await new Promise(r => setTimeout(r, 300))
+            } catch { break }
+          }
+          if (chapters.length > 0) {
+            chapters.sort((a, b) => a.num - b.num)
+            return chapters
+          }
+        }
+      }
+
+      // Pattern 2: Standard HTML pagination
+      {
+        let pageUrl: string | undefined = storyUrl
+        let pageCount = 0
+        const MAX_HTML_PAGES = 100
+        const htmlChapters: ChapterRef[] = []
+
+        while (pageUrl && pageCount < MAX_HTML_PAGES) {
+          const pageHtml = pageUrl === storyUrl ? html : await fetch$(pageUrl, 15000)
+          const { chapters: pageChaps, nextPageUrl } = this.fetchChapterList(pageUrl, pageHtml)
+
+          for (const ch of pageChaps) {
+            if (!htmlChapters.find(c => c.num === ch.num)) htmlChapters.push(ch)
+          }
+
+          if (pageChaps.length === 0 || !nextPageUrl) break
+          if (nextPageUrl === pageUrl) break
+
+          pageUrl = nextPageUrl
+          pageCount++
+          await new Promise(r => setTimeout(r, 400))
+        }
+
+        if (htmlChapters.length > 0) {
+          htmlChapters.sort((a, b) => a.num - b.num)
+          return htmlChapters
+        }
+      }
+
+      // Pattern 3: Last resort — use chapterListSel if configured, else broad link scan
+      const $ = cheerio.load(html)
+      const allChapters: ChapterRef[] = []
+
+      // Helper: extract chapter number from text or URL
+      function guessNum(text: string, href: string): number | null {
+        // 1. URL explicit number
+        const urlNum = href.match(/(?:chuong|chapter|chap|tap|ep|phan)[_-](\d+)/i)
+        if (urlNum) return parseInt(urlNum[1])
+
+        // 2. Scan all numbers in title
+        const t = text.normalize('NFC').replace(/\s+/g, ' ').trim()
+        const allNums = Array.from(t.matchAll(/(\d+)/g))
+        if (allNums.length === 0) return null
+        if (allNums.length === 1) return parseInt(allNums[0][1])
+
+        // 3. Multiple numbers — prefer number adjacent to chapter keyword
+        const kwPattern = /ch[uư][oô]ng|chapter|chap|t[aập]p|tap|ep|h[oồ]i|đ|đệ|đề|ti[eết]t|quy[eể]n/gi
+        let bestNum: number | null = null
+        let bestDist = Infinity
+        for (const kw of Array.from(t.matchAll(kwPattern))) {
+          const kwEnd = kw.index! + kw[0].length
+          for (const nm of allNums) {
+            const dist = Math.min(Math.abs(nm.index! - kwEnd), Math.abs(kw.index! - (nm.index! + nm[1].length)))
+            if (dist < bestDist) { bestDist = dist; bestNum = parseInt(nm[1]) }
+          }
+        }
+        if (bestNum !== null) return bestNum
+
+        // 4. First number
+        return parseInt(allNums[0][1])
+      }
+
+      const sel3 = cfg.chapterListSel || 'a[href]'
+      $( sel3).each((_, el) => {
+        const $a = $(el).is('a') ? $(el) : $(el).find('a').first()
+        if (!$a.length) return
+        const href = $a.attr('href') ?? ''
+        if (!href || href === '#' || href.startsWith('javascript') || href.startsWith('mailto')) return
+        const text = $a.attr('title') || $a.text().trim()
+        const num = guessNum(text, href)
+        if (num !== null && num > 0 && num < 100000) {
+          const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : ''
+          if (chUrl && !allChapters.find(c => c.num === num)) {
+            allChapters.push({ num, title: text || `Chương ${num}`, url: chUrl })
+          }
+        }
+      })
+      allChapters.sort((a, b) => a.num - b.num)
+      return allChapters
+    },
+
+    // ── Chapter content ─────────────────────────────────────────────────────────
+    fetchChapterContent(_url, html) {
+      const $ = cheerio.load(html)
+
+      $('script, style, noscript, iframe').remove()
+      $('[class*="ad"], [id*="ad"], [class*="banner"], [class*="related"], [class*="recommend"]').remove()
+      $('nav, header, footer, .breadcrumb, [class*="menu"], [class*="sidebar"]').remove()
+      $('[class*="comment"], [class*="rating"], [class*="share"], [class*="social"]').remove()
+
+      if (cfg.chapterContentSel) {
+        const cleanHtml = extractCleanHtml($, cfg.chapterContentSel)
+        if (cleanHtml.length > 200) return cleanHtml
+      }
+
+      const contentSelectors = [
+        '#chapter-content', '.chapter-content', '.content-chapter', '#content-chapter',
+        '[id*="chapter-c"]', '.box-chapter', '#chapter-c',
+        '.reading-content', '.chapter-body', '.novel-content',
+        'article[class*="chapter"]', '.story-content', '#content',
+      ]
+      for (const sel of contentSelectors) {
+        const cleanHtml = extractCleanHtml($, sel)
+        if (cleanHtml.length > 200) return cleanHtml
+      }
+
+      let bestSel = ''
+      let bestScore = 0
+      $('div, section, article').each((_, el) => {
+        const $el = $(el)
+        const pCount = $el.find('p').length
+        const textLen = $el.text().trim().length
+        const score = pCount * 100 + textLen
+        if (score > bestScore && pCount >= 3 && textLen > 500) {
+          bestScore = score
+          const id = $el.attr('id')
+          const cls = $el.attr('class')?.split(' ')[0]
+          bestSel = id ? `#${id}` : cls ? `.${cls}` : ''
+        }
+      })
+      if (bestSel) {
+        const cleanHtml = extractCleanHtml($, bestSel)
+        if (cleanHtml.length > 200) return cleanHtml
+      }
+
+      const pHtmlParts: string[] = []
+      $('p').each((_, el) => {
+        const text = $(el).text().trim()
+        if (text.length > 20 && !text.match(/^(Chương|Chapter|\d+|Trang|Về đầu|Tiếp|Trước|←|→)/)) {
+          pHtmlParts.push(`<p>${text}</p>`)
+        }
+      })
+      if (pHtmlParts.length > 3) return pHtmlParts.join('\n')
+
+      const plainText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 80000)
+      return plainText.split(/\n{2,}/).map(p => `<p>${p.trim()}</p>`).join('\n')
+    }
+  }
+}
+
+// ─── Generic Adapter ──────────────────────────────────────────────────────────
+// Smart fallbacks for any unknown site when no DB SiteConfig is configured
+
+const genericAdapter: SiteAdapter = {
+  name: 'Generic (best-effort)',
+  matches: () => true,
+
+  fetchStoryInfo(url, html) {
+    const $ = cheerio.load(html)
+    let title = $('h1').first().text().trim()
+      || $('meta[property="og:title"]').attr('content')?.split(' - ')[0].trim() || ''
+    title = title.replace(/\s*[-|]\s*(Doc Truyen|Truyen Chu|Novel|TruyenFull|MeTruyenChu).*/i, '').trim()
+    const bodyText = $('body').text().toLowerCase()
+    const status: StoryInfo['status'] = bodyText.includes('hoan thanh') ? 'COMPLETED' : 'ONGOING'
+    return {
+      title,
+      author: $('[itemprop="author"]').first().text().trim() || $('meta[name="author"]').attr('content')?.trim() || '',
+      description: $('meta[property="og:description"]').attr('content')?.trim() || $('meta[name="description"]').attr('content')?.trim() || '',
+      coverUrl: $('meta[property="og:image"]').attr('content') || '',
+      genres: [],
+      status,
+      totalChapters: 0,
+      sourceUrl: url,
+    }
+  },
+
+  fetchChapterList(url, html) {
+    const $ = cheerio.load(html)
+    const origin = new URL(url).origin
+    const chapters: ChapterRef[] = []
+    $('a[href*="chuong"], a[href*="chapter"]').each((_, el) => {
+      const href = $(el).attr('href') ?? ''
+      const match = href.match(/chuong[_-](\d+)|chapter[_-](\d+)/i)
+      if (match && href) {
+        const num = parseInt(match[1] || match[2])
+        const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : new URL(href, url).toString()
+        if (!chapters.find(c => c.num === num)) chapters.push({ num, title: $(el).text().trim() || `Chuong ${num}`, url: chUrl })
+      }
+    })
+    return { chapters }
+  },
+
+  fetchChapterContent(_url, html) {
+    const $ = cheerio.load(html)
+    $('script, style, nav, header, footer, .ads').remove()
+    const cleanHtml = extractCleanHtml($, 'article, main, .content, .chapter, #content, #chapter-content')
+    if (cleanHtml.length > 100) return cleanHtml
+    const pParts: string[] = []
+    $('p').each((_, el) => {
+      const t = $(el).text().trim()
+      if (t.length > 20) pParts.push('<p>' + t + '</p>')
+    })
+    return pParts.length > 3 ? pParts.join('\n') : '<p>' + $('body').text().replace(/\s+/g, ' ').trim().slice(0, 50000) + '</p>'
+  }
+}
+
+export function getAdapter(_url: string): SiteAdapter {
+  return genericAdapter
+}
+
+/**
+ * Get adapter for a URL.
+ * Priority: DB SiteConfig (custom adapter) → Generic adapter
+ */
+export async function getAdapterWithDbConfig(url: string): Promise<{ adapter: SiteAdapter; cookies: string | undefined }> {
+  const domain = extractDomain(url)
+
+  try {
+    const { prisma } = await import('@/lib/prisma')
+    const cfg = await prisma.siteConfig.findFirst({
+      where: { domain, isActive: true },
+    })
+    if (cfg) {
+      return {
+        adapter: buildAdapterFromConfig(cfg as DbSiteConfig),
+        cookies: (cfg as DbSiteConfig).cookies || undefined,
+      }
+    }
+  } catch {
+    // DB not available
+  }
+
+  return { adapter: genericAdapter, cookies: undefined }
+}
+
+// ─── Helper: download and save cover image to local storage ───────────────────
+
+export async function downloadAndSaveCover(imageUrl: string): Promise<string | null> {
+  if (!imageUrl || !imageUrl.startsWith('http')) return null
+
+  try {
+    const res = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'image/webp,image/avif,image/*,*/*',
+        'Referer': new URL(imageUrl).origin + '/',
+      },
+      signal: AbortSignal.timeout(15000),
+    })
+
+    if (!res.ok) return null
+
+    const contentType = res.headers.get('content-type') ?? ''
+    let ext = 'jpg'
+    if (contentType.includes('png')) ext = 'png'
+    else if (contentType.includes('webp')) ext = 'webp'
+    else if (contentType.includes('gif')) ext = 'gif'
+    else {
+      const urlExt = imageUrl.split('?')[0].split('.').pop()?.toLowerCase()
+      if (urlExt && ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif'].includes(urlExt)) ext = urlExt
+    }
+
+    const { writeFile, mkdir } = await import('fs/promises')
+    const { join } = await import('path')
+    const { randomUUID } = await import('crypto')
+
+    const filename = `${randomUUID()}.${ext}`
+    const uploadDir = join(process.cwd(), 'public', 'uploads')
+    await mkdir(uploadDir, { recursive: true })
+
+    const bytes = await res.arrayBuffer()
+    if (bytes.byteLength < 100) return null
+
+    await writeFile(join(uploadDir, filename), Buffer.from(bytes))
+    return `/uploads/${filename}`
+  } catch {
+    return null
+  }
+}
