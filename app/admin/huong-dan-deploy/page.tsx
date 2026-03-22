@@ -39,10 +39,10 @@ function Inline({ children }: { children: string }) {
 
 function Alert({ type, children }: { type: 'warn' | 'info' | 'success' | 'danger'; children: React.ReactNode }) {
   const cfg = {
-    warn:    { cls: 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400',  Icon: AlertTriangle },
-    info:    { cls: 'bg-blue-500/10   border-blue-500/30   text-blue-700   dark:text-blue-400', Icon: Globe },
+    warn: { cls: 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400', Icon: AlertTriangle },
+    info: { cls: 'bg-blue-500/10   border-blue-500/30   text-blue-700   dark:text-blue-400', Icon: Globe },
     success: { cls: 'bg-green-500/10  border-green-500/30  text-green-700  dark:text-green-400', Icon: CheckCircle2 },
-    danger:  { cls: 'bg-red-500/10    border-red-500/30    text-red-700    dark:text-red-400',  Icon: AlertTriangle },
+    danger: { cls: 'bg-red-500/10    border-red-500/30    text-red-700    dark:text-red-400', Icon: AlertTriangle },
   }
   const { cls, Icon } = cfg[type]
   return (
