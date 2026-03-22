@@ -5,6 +5,7 @@
 import type { NextAuthConfig } from 'next-auth'
 
 export const authConfig: NextAuthConfig = {
+  trustHost: true,
   session: { strategy: 'jwt' },
   pages: { signIn: '/dang-nhap' },
   providers: [], // providers được khai báo trong lib/auth.ts server-side
