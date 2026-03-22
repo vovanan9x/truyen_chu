@@ -2,7 +2,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 
-export const SITE_PRESETS = [
+const SITE_PRESETS = [
   {
     key: 'truyenfull',
     name: 'TruyenFull',
