@@ -4,6 +4,8 @@
  */
 
 import * as cheerio from 'cheerio'
+import { getCrawlSettings } from './crawl-settings'
+import { getBypassCookie, getCachedBypassCookie, invalidateBypassCookie } from './playwright-bypass'
 
 const FETCH_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -14,17 +16,25 @@ const FETCH_HEADERS = {
 }
 
 // ─── Proxy Agent (undici, built into Node.js 18+) ─────────────────────────────
-// Set CRAWL_PROXY_URL=http://user:pass@proxy-host:port to route all crawler
-// requests through a proxy (bypasses Cloudflare and other bot protections).
+// Proxy URL is read from DB settings (crawl_proxy_host/port/user/pass)
+// or falls back to CRAWL_PROXY_URL env variable.
 
 let _proxyAgent: any = undefined
-let _proxyAgentInit = false
+let _proxyAgentUrl: string | null = null
 
 async function getProxyAgent() {
-  if (_proxyAgentInit) return _proxyAgent
-  _proxyAgentInit = true
-  const proxyUrl = process.env.CRAWL_PROXY_URL
+  const settings = await getCrawlSettings()
+  const proxyUrl = settings.proxyUrl
+
+  // Reset agent if proxy URL changed
+  if (_proxyAgentUrl !== proxyUrl) {
+    _proxyAgent = undefined
+    _proxyAgentUrl = proxyUrl
+  }
+
   if (!proxyUrl) return null
+  if (_proxyAgent) return _proxyAgent
+
   try {
     const { ProxyAgent } = await import('undici')
     _proxyAgent = new ProxyAgent(proxyUrl)
@@ -70,20 +80,43 @@ export async function fetchUrl(url: string, timeout = 15000, cookies?: string): 
     ...(cookies ? { 'Cookie': cookies } : {}),
   }
 
-  const proxyAgent = await getProxyAgent()
-  if (proxyAgent) {
-    const { fetch: undiciFetch } = await import('undici')
-    const res = await (undiciFetch as any)(url, {
-      headers,
-      signal: AbortSignal.timeout(timeout),
-      redirect: 'follow',
-      dispatcher: proxyAgent,
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
-    return res.text()
+  // Helper: do 1 fetch attempt (with optional proxy)
+  async function doFetch(extraCookies?: string): Promise<Response> {
+    const h = extraCookies ? { ...headers, 'Cookie': extraCookies } : headers
+    const proxyAgent = await getProxyAgent()
+    if (proxyAgent) {
+      const { fetch: undiciFetch } = await import('undici')
+      return (undiciFetch as any)(url, { headers: h, signal: AbortSignal.timeout(timeout), redirect: 'follow', dispatcher: proxyAgent })
+    }
+    return fetch(url, { headers: h, signal: AbortSignal.timeout(timeout), redirect: 'follow' })
   }
 
-  const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeout), redirect: 'follow' })
+  let res = await doFetch(cookies)
+
+  // On 403 → try Playwright bypass if enabled
+  if (res.status === 403) {
+    const settings = await getCrawlSettings()
+
+    // Check if we have a cached bypass cookie first
+    let bypassCookie = getCachedBypassCookie(url)
+    if (!bypassCookie && settings.usePlaywright) {
+      console.log(`[fetchUrl] 403 from ${url} — launching Playwright...`)
+      bypassCookie = await getBypassCookie(url, settings)
+    }
+
+    if (bypassCookie) {
+      const combined = cookies ? `${bypassCookie}; ${cookies}` : bypassCookie
+      res = await doFetch(combined)
+      // If still failing, invalidate the cached cookie
+      if (res.status === 403) {
+        invalidateBypassCookie(url)
+        throw new Error(`HTTP 403 — Playwright bypass failed for ${new URL(url).hostname}`)
+      }
+    } else {
+      throw new Error(`HTTP 403 ${res.statusText} — ${new URL(url).hostname} blocked (enable Playwright bypass in admin settings)`)
+    }
+  }
+
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
   return res.text()
 }

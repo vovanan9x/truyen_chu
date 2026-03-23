@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Save, Loader2, Check, Globe, Image, AlertCircle, Megaphone, Code2 } from 'lucide-react'
+import { Save, Loader2, Check, Globe, Image, AlertCircle, Megaphone, Code2, ShieldCheck, Wifi, WifiOff } from 'lucide-react'
 
 const DEFAULT_SETTINGS = {
   site_domain: '',
@@ -20,6 +20,12 @@ const DEFAULT_SETTINGS = {
   ad_story_detail_code: '',
   ad_sidebar_enabled: '',
   ad_sidebar_code: '',
+  // Crawler proxy
+  crawl_proxy_host: '',
+  crawl_proxy_port: '10000',
+  crawl_proxy_user: '',
+  crawl_proxy_pass: '',
+  crawl_use_playwright: '',
 }
 
 type Settings = typeof DEFAULT_SETTINGS
@@ -38,6 +44,8 @@ export default function AdminGeneralSettingsPage() {
   const [uploadingFavicon, setUploadingFavicon] = useState(false)
   const logoRef = useRef<HTMLInputElement>(null)
   const faviconRef = useRef<HTMLInputElement>(null)
+  const [testingProxy, setTestingProxy] = useState(false)
+  const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; ip?: string; error?: string } | null>(null)
 
   useEffect(() => {
     fetch('/api/admin/settings').then(r => r.json()).then(data => {
@@ -78,6 +86,28 @@ export default function AdminGeneralSettingsPage() {
       else { const d = await res.json(); setError(d.error ?? 'Lỗi lưu') }
     } catch { setError('Lỗi kết nối') }
     setSaving(false)
+  }
+
+  async function testProxy() {
+    setTestingProxy(true)
+    setProxyTestResult(null)
+    try {
+      const res = await fetch('/api/admin/crawler/test-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          host: settings.crawl_proxy_host,
+          port: settings.crawl_proxy_port,
+          user: settings.crawl_proxy_user,
+          pass: settings.crawl_proxy_pass,
+        }),
+      })
+      const data = await res.json()
+      setProxyTestResult(data)
+    } catch {
+      setProxyTestResult({ ok: false, error: 'Lỗi kết nối tới server' })
+    }
+    setTestingProxy(false)
   }
 
   if (loading) return <div className="flex items-center gap-2 py-10 text-muted-foreground"><Loader2 className="animate-spin w-5 h-5" /> Đang tải...</div>
@@ -253,6 +283,74 @@ export default function AdminGeneralSettingsPage() {
               </div>
             )
           })}
+        </div>
+      </div>
+
+      {/* Crawler & Proxy */}
+      <div className="p-5 rounded-2xl border border-border bg-card space-y-4">
+        <div>
+          <h2 className="font-semibold flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-blue-500" /> Crawler Proxy & Cloudflare Bypass</h2>
+          <p className="text-xs text-muted-foreground mt-1">Dùng proxy để bypass block IP. Bật Playwright để tự động vượt Cloudflare JS Challenge (403).</p>
+        </div>
+
+        {/* Proxy fields */}
+        <div className="grid grid-cols-2 gap-3">
+          <div className="col-span-2 sm:col-span-1">
+            <label className={labelCls}>Proxy Host</label>
+            <input value={settings.crawl_proxy_host} onChange={e => set('crawl_proxy_host', e.target.value)}
+              placeholder="proxy.webshare.io" className={inputCls + ' font-mono'} />
+          </div>
+          <div>
+            <label className={labelCls}>Port</label>
+            <input value={settings.crawl_proxy_port} onChange={e => set('crawl_proxy_port', e.target.value)}
+              placeholder="10000" className={inputCls + ' font-mono'} />
+          </div>
+          <div>
+            <label className={labelCls}>Username</label>
+            <input value={settings.crawl_proxy_user} onChange={e => set('crawl_proxy_user', e.target.value)}
+              placeholder="user" autoComplete="off" className={inputCls} />
+          </div>
+          <div>
+            <label className={labelCls}>Password</label>
+            <input type="password" value={settings.crawl_proxy_pass} onChange={e => set('crawl_proxy_pass', e.target.value)}
+              placeholder="••••••••" autoComplete="new-password" className={inputCls} />
+          </div>
+        </div>
+
+        {/* Test proxy button + result */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={testProxy} disabled={testingProxy || !settings.crawl_proxy_host}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border hover:bg-muted text-sm font-medium transition-colors disabled:opacity-50">
+            {testingProxy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
+            {testingProxy ? 'Đang test...' : 'Test kết nối proxy'}
+          </button>
+          {proxyTestResult && (
+            <div className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg ${
+              proxyTestResult.ok ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'
+            }`}>
+              {proxyTestResult.ok
+                ? <><Wifi className="w-4 h-4" /> IP qua proxy: <strong>{proxyTestResult.ip}</strong></>
+                : <><WifiOff className="w-4 h-4" /> Lỗi: {proxyTestResult.error}</>}
+            </div>
+          )}
+        </div>
+
+        {/* Playwright toggle */}
+        <div className="flex items-center justify-between p-4 rounded-xl border border-border bg-background">
+          <div>
+            <p className="text-sm font-semibold">🎭 Auto Playwright bypass</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Tự động dùng Chromium để giải Cloudflare challenge khi gặp 403. Cookie được cache 23 tiếng.</p>
+            <p className="text-xs text-amber-600 mt-1">⚠️ Cần cài trên VPS: <code className="bg-muted px-1 rounded">npx playwright install chromium && npx playwright install-deps chromium</code></p>
+          </div>
+          <button
+            onClick={() => set('crawl_use_playwright', settings.crawl_use_playwright === '1' ? '' : '1')}
+            className={`relative w-12 h-7 rounded-full transition-colors flex-shrink-0 ml-4 ${
+              settings.crawl_use_playwright === '1' ? 'bg-primary' : 'bg-muted-foreground/30'
+            }`}>
+            <span className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+              settings.crawl_use_playwright === '1' ? 'translate-x-6' : 'translate-x-1'
+            }`} />
+          </button>
         </div>
       </div>
 
