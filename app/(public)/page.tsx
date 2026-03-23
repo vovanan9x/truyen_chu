@@ -5,8 +5,10 @@ import { prisma } from '@/lib/prisma'
 import FeaturedCarousel from '@/components/story/FeaturedCarousel'
 import StoryGrid from '@/components/story/StoryGrid'
 import { StoryCardData } from '@/components/story/StoryCard'
-
 import { buildHomeMeta } from '@/lib/seo'
+
+// Tự động revalidate mỗi 30s → truyện/chương mới hiện trong vòng 30s
+export const revalidate = 30
 
 export async function generateMetadata() {
   const meta = await buildHomeMeta()
