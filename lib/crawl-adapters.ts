@@ -342,11 +342,17 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
         }
       })
 
+      // Next page: use configured selector, or fall back to common patterns
       let nextPageUrl: string | undefined
-      if (cfg.nextPageSel) {
-        const nextHref = $(cfg.nextPageSel).attr('href')
-        if (nextHref && !nextHref.includes('javascript')) {
-          nextPageUrl = nextHref.startsWith('http') ? nextHref : origin + nextHref
+      const nextEl = cfg.nextPageSel
+        ? $(cfg.nextPageSel).first()
+        : $('a[rel="next"], .pagination .next a, .pagination a[aria-label*="ext"], li.next a, .pager-next a, a.next-page, a:contains("›"):last, a:contains("»"):last').first()
+      const nextHref = nextEl.attr('href')
+      if (nextHref && !nextHref.includes('javascript') && nextHref !== '#') {
+        const resolved = nextHref.startsWith('http') ? nextHref : origin + nextHref
+        // Validate: must differ from current URL and be same domain
+        if (resolved !== url && resolved.startsWith(origin)) {
+          nextPageUrl = resolved
         }
       }
 
@@ -638,7 +644,44 @@ const genericAdapter: SiteAdapter = {
         if (!chapters.find(c => c.num === num)) chapters.push({ num, title: $(el).text().trim() || `Chuong ${num}`, url: chUrl })
       }
     })
-    return { chapters }
+
+    // Detect next page (common selectors — no config needed)
+    let nextPageUrl: string | undefined
+    const nextEl = $('a[rel="next"], .pagination .next a, .pagination a[aria-label*="ext"], li.next a, .pager-next a').first()
+    const nextHref = nextEl.attr('href')
+    if (nextHref && !nextHref.includes('javascript') && nextHref !== '#') {
+      const resolved = nextHref.startsWith('http') ? nextHref : origin + nextHref
+      if (resolved !== url && resolved.startsWith(origin)) nextPageUrl = resolved
+    }
+
+    return { chapters, nextPageUrl }
+  },
+
+  // Follow all paginated pages to get the full chapter list
+  async fetchAllChapters(storyUrl: string, html: string): Promise<ChapterRef[]> {
+    const origin = new URL(storyUrl).origin
+    let pageUrl: string | undefined = storyUrl
+    let pageCount = 0
+    const MAX_PAGES = 100
+    const allChapters: ChapterRef[] = []
+
+    while (pageUrl && pageCount < MAX_PAGES) {
+      const pageHtml = pageUrl === storyUrl ? html : await fetchUrl(pageUrl, 15000)
+      const { chapters: pageChaps, nextPageUrl } = this.fetchChapterList(pageUrl, pageHtml)
+
+      for (const ch of pageChaps) {
+        if (!allChapters.find(c => c.num === ch.num || c.url === ch.url)) allChapters.push(ch)
+      }
+
+      console.log(`[Generic] page ${pageCount + 1}: ${pageChaps.length} chapters, nextPage: ${nextPageUrl ?? 'none'}`)
+      if (!nextPageUrl || nextPageUrl === pageUrl || pageChaps.length === 0) break
+      pageUrl = nextPageUrl
+      pageCount++
+      await new Promise(r => setTimeout(r, 400))
+    }
+
+    allChapters.sort((a, b) => a.num - b.num)
+    return allChapters
   },
 
   fetchChapterContent(_url, html) {
