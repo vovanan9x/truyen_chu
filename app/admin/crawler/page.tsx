@@ -614,49 +614,49 @@ export default function AdminCrawlerPage() {
               </button>
             </div>
           )}
+        </div>
+      )}
 
-          {activeJob&&(
-            <div className="p-5 rounded-2xl border border-border bg-card space-y-4">
-              <div className="flex items-center justify-between flex-wrap gap-3">
-                <div className="flex items-center gap-3"><StatusBadge status={activeJob.status}/><span className="font-semibold">{activeJob.storyTitle??preview?.title??url}</span></div>
-                <div className="flex items-center gap-2">
-                  {/* Nút Dừng cho activeJob */}
-                  {(activeJob.status==='running'||activeJob.status==='pending')&&(
-                    <button
-                      onClick={async()=>{
-                        const res = await fetch(`/api/admin/crawl/status/${activeJobId}/cancel`, { method: 'POST' })
-                        if (res.ok) {
-                          setActiveJob(prev => prev ? { ...prev, status: 'cancelled' } : prev)
-                          clearInterval(pollRef.current!)
-                        } else {
-                          const d = await res.json().catch(()=>({}))
-                          alert(d.error ?? 'Không thể dừng')
-                        }
-                      }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 text-sm font-medium transition-colors"
-                    >
-                      <StopCircle className="w-4 h-4"/> Dừng crawl
-                    </button>
-                  )}
-                  {(activeJob.status==='completed'||activeJob.status==='failed')&&activeJob.storyId&&(
-                    <Link href={`/admin/truyen/${activeJob.storyId}`} className="flex items-center gap-1.5 text-sm text-primary hover:underline">Xem truyện <ExternalLink className="w-3.5 h-3.5"/></Link>
-                  )}
-                </div>
-              </div>
-              {activeJob.totalChapters>0&&<ProgressBar imported={activeJob.importedChapters} total={activeJob.totalChapters}/>}
-              {activeJob.failedChapters>0&&<p className="text-xs text-destructive">❌ {activeJob.failedChapters} chương thất bại</p>}
-              <LogPanel logs={activeJob.logs ?? []} isLive={activeJob.status === 'running'} scrollRef={logsEndRef}/>
-              {activeJob.status==='running'&&<p className="text-xs text-muted-foreground text-center animate-pulse">⏳ Đang crawl — tự động cập nhật sau 2 giây...</p>}
-              {activeJob.status==='cancelled'&&<p className="text-xs text-amber-600 text-center">🛑 Đã dừng — những chương đã crawl được đã được lưu vào DB</p>}
-              {activeJob.status==='completed'&&addScheduleAfter&&preview&&activeJob.storyId&&(
-                <button onClick={async()=>{
-                  await fetch('/api/admin/crawl/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({storyId:activeJob.storyId,sourceUrl:url,intervalMinutes:schedInterval})})
-                  alert(`✅ Đã bật auto-crawl mỗi ${schedInterval} phút cho ${preview.title}`)
-                }} className="w-full py-2 rounded-xl bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600">
-                  <Timer className="w-4 h-4 inline mr-1"/>Bật auto-crawl mỗi {schedInterval} phút
+      {/* ═══ Active Job Panel — luôn hiển thị dù đang ở tab nào ═══════════════ */}
+      {activeJob&&(
+        <div className="p-5 rounded-2xl border border-primary/30 bg-card space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-3"><StatusBadge status={activeJob.status}/><span className="font-semibold">{activeJob.storyTitle??preview?.title??url}</span></div>
+            <div className="flex items-center gap-2">
+              {(activeJob.status==='running'||activeJob.status==='pending')&&(
+                <button
+                  onClick={async()=>{
+                    const res = await fetch(`/api/admin/crawl/status/${activeJobId}/cancel`, { method: 'POST' })
+                    if (res.ok) {
+                      setActiveJob(prev => prev ? { ...prev, status: 'cancelled' } : prev)
+                      clearInterval(pollRef.current!)
+                    } else {
+                      const d = await res.json().catch(()=>({}))
+                      alert(d.error ?? 'Không thể dừng')
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-600 text-sm font-semibold transition-colors border border-red-200"
+                >
+                  <StopCircle className="w-4 h-4"/> 🛑 Dừng crawl
                 </button>
               )}
+              {(activeJob.status==='completed'||activeJob.status==='failed')&&activeJob.storyId&&(
+                <Link href={`/admin/truyen/${activeJob.storyId}`} className="flex items-center gap-1.5 text-sm text-primary hover:underline">Xem truyện <ExternalLink className="w-3.5 h-3.5"/></Link>
+              )}
             </div>
+          </div>
+          {activeJob.totalChapters>0&&<ProgressBar imported={activeJob.importedChapters} total={activeJob.totalChapters}/>}
+          {activeJob.failedChapters>0&&<p className="text-xs text-destructive">❌ {activeJob.failedChapters} chương thất bại</p>}
+          <LogPanel logs={activeJob.logs ?? []} isLive={activeJob.status === 'running'} scrollRef={logsEndRef}/>
+          {activeJob.status==='running'&&<p className="text-xs text-muted-foreground text-center animate-pulse">⏳ Đang crawl — tự động cập nhật sau 2 giây...</p>}
+          {activeJob.status==='cancelled'&&<p className="text-xs text-amber-600 text-center">🛑 Đã dừng — những chương đã crawl được đã được lưu vào DB</p>}
+          {activeJob.status==='completed'&&addScheduleAfter&&preview&&activeJob.storyId&&(
+            <button onClick={async()=>{
+              await fetch('/api/admin/crawl/schedules',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({storyId:activeJob.storyId,sourceUrl:url,intervalMinutes:schedInterval})})
+              alert(`✅ Đã bật auto-crawl mỗi ${schedInterval} phút cho ${preview.title}`)
+            }} className="w-full py-2 rounded-xl bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600">
+              <Timer className="w-4 h-4 inline mr-1"/>Bật auto-crawl mỗi {schedInterval} phút
+            </button>
           )}
         </div>
       )}
