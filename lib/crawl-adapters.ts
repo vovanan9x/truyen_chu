@@ -399,6 +399,8 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
     // ── AJAX chapter list fetcher ───────────────────────────────────────────────
     async fetchAllChapters(storyUrl: string, html: string): Promise<ChapterRef[]> {
       const origin = new URL(storyUrl).origin
+      // Collect only chapters belonging to THIS story (prevents sidebar/recommended links pollution)
+      const storySlug = new URL(storyUrl).pathname.replace(/^\//, '').split('/')[0]
 
       // Pattern 1: Config-driven AJAX API
       const apiUrlTemplate = cfg.chapterApiUrl
@@ -461,6 +463,8 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
                 const href = $$(el).attr('href') ?? ''
                 if (!href.includes('chuong') && !href.includes('chapter') && !href.includes('chap')) return
                 if (href === '#' || href.startsWith('javascript')) return
+                // Only accept URLs that belong to this story (prevents sidebar/related story contamination)
+                if (storySlug && !href.includes(storySlug)) return
                 const text = $$(el).attr('title') || $$(el).text().trim()
                 const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : ''
                 if (!chUrl) return
@@ -480,8 +484,8 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
                   if (tm) num = parseInt(tm[1])
                 }
 
-                // Fallback: use running count as chapter number
-                if (!num) num = chapters.length + 1
+                // Skip if chapter number cannot be determined (avoids phantom chapters)
+                if (!num || num <= 0 || num >= 100000) return
 
                 chapters.push({ num, title: text || `Chương ${num}`, url: chUrl })
               })
