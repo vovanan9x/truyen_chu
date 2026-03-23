@@ -93,52 +93,52 @@ export default async function StoryDetailPage({
   prisma.story.update({ where: { id: story.id }, data: { viewCount: { increment: 1 } } }).catch(() => {})
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 sm:gap-8">
         {/* Left column */}
-        <div className="lg:col-span-3 space-y-8">
-          {/* Hero Section */}
-          <div className="flex flex-col sm:flex-row gap-6">
-            {/* Cover */}
-            <div className="flex-shrink-0 mx-auto sm:mx-0">
-              <div className="relative w-48 h-72 rounded-2xl overflow-hidden shadow-xl">
+        <div className="lg:col-span-3 space-y-5 sm:space-y-8">
+          {/* Hero Section — side-by-side on ALL sizes */}
+          <div className="flex flex-row gap-4 sm:gap-6">
+            {/* Cover — smaller on mobile */}
+            <div className="flex-shrink-0">
+              <div className="relative w-28 h-40 sm:w-44 sm:h-64 md:w-48 md:h-72 rounded-xl sm:rounded-2xl overflow-hidden shadow-lg sm:shadow-xl">
                 {story.coverUrl ? (
                   <Image src={story.coverUrl} alt={story.title} fill className="object-cover" />
                 ) : (
                   <div className="w-full h-full gradient-primary flex items-center justify-center">
-                    <BookOpen className="w-16 h-16 text-white/60" />
+                    <BookOpen className="w-10 h-10 sm:w-16 sm:h-16 text-white/60" />
                   </div>
                 )}
               </div>
             </div>
 
             {/* Meta */}
-            <div className="flex-1 space-y-4">
+            <div className="flex-1 min-w-0 space-y-2 sm:space-y-4">
               <div>
-                <h1 className="text-2xl md:text-3xl font-bold leading-tight">{story.title}</h1>
+                <h1 className="text-base sm:text-2xl md:text-3xl font-bold leading-tight line-clamp-3 sm:line-clamp-none">{story.title}</h1>
                 {story.author && (
-                  <p className="text-muted-foreground mt-1">Tác giả: <span className="font-medium text-foreground">{story.author}</span></p>
+                  <p className="text-muted-foreground mt-0.5 text-xs sm:text-sm">Tác giả: <span className="font-medium text-foreground">{story.author}</span></p>
                 )}
               </div>
 
               {/* Stats */}
-              <div className="flex flex-wrap gap-4 text-sm">
-                <span className={`flex items-center gap-1.5 font-medium ${status.color}`}>
-                  <StatusIcon className="w-4 h-4" />
+              <div className="flex flex-wrap gap-2 sm:gap-4 text-xs sm:text-sm">
+                <span className={`flex items-center gap-1 sm:gap-1.5 font-medium ${status.color}`}>
+                  <StatusIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                   {status.label}
                 </span>
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <Eye className="w-4 h-4" />
-                  {formatNumber(story.viewCount)} lượt đọc
+                <span className="flex items-center gap-1 sm:gap-1.5 text-muted-foreground">
+                  <Eye className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  {formatNumber(story.viewCount)}
                 </span>
-                <span className="flex items-center gap-1.5 text-muted-foreground">
-                  <BookOpen className="w-4 h-4" />
-                  {story._count.chapters} chương
+                <span className="flex items-center gap-1 sm:gap-1.5 text-muted-foreground">
+                  <BookOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  {story._count.chapters} ch.
                 </span>
               </div>
 
-              {/* Genres */}
-              <div className="flex flex-wrap gap-2">
+              {/* Genres — hidden on mobile to save space, shown on sm+ */}
+              <div className="hidden sm:flex flex-wrap gap-2">
                 {story.genres.map((sg) => (
                   <Link
                     key={sg.genre.slug}
@@ -151,13 +151,13 @@ export default async function StoryDetailPage({
               </div>
 
               {/* Actions */}
-              <div className="flex flex-wrap gap-3 pt-2">
+              <div className="flex flex-wrap gap-1.5 sm:gap-3 pt-1 sm:pt-2">
                 {chapters[0] && (
                   <Link
                     href={`/truyen/${story.slug}/chuong/1`}
-                    className="px-6 py-2.5 rounded-xl font-semibold text-white gradient-primary hover:opacity-90 transition-opacity shadow-sm text-sm flex items-center gap-2"
+                    className="px-3 sm:px-6 py-2 sm:py-2.5 rounded-lg sm:rounded-xl font-semibold text-white gradient-primary hover:opacity-90 transition-opacity shadow-sm text-xs sm:text-sm flex items-center gap-1.5"
                   >
-                    <BookOpen className="w-4 h-4" />
+                    <BookOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
                     Đọc từ đầu
                   </Link>
                 )}
@@ -167,10 +167,23 @@ export default async function StoryDetailPage({
               </div>
 
               {/* Rating */}
-              <div className="pt-3 border-t border-border/50">
+              <div className="pt-2 sm:pt-3 border-t border-border/50">
                 <RatingStars storyId={story.id} initialRating={story.rating} ratingCount={story.ratingCount} />
               </div>
             </div>
+          </div>
+
+          {/* Genres on mobile — shown below hero */}
+          <div className="flex sm:hidden flex-wrap gap-1.5">
+            {story.genres.map((sg) => (
+              <Link
+                key={sg.genre.slug}
+                href={`/the-loai/${sg.genre.slug}`}
+                className="px-2.5 py-1 rounded-full bg-accent text-accent-foreground text-xs font-medium hover:bg-primary/10 hover:text-primary transition-colors"
+              >
+                {sg.genre.name}
+              </Link>
+            ))}
           </div>
 
           {/* Description */}
