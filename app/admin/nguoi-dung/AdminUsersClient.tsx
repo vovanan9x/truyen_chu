@@ -12,7 +12,7 @@ interface User {
   _count: { bookmarks: number; readingHistory: number }
 }
 
-const ROLE_OPTIONS = ['READER', 'AUTHOR', 'TRANSLATOR', 'ADMIN']
+const ROLE_OPTIONS = ['READER', 'AUTHOR', 'TRANSLATOR', 'MOD', 'ADMIN']
 const BAN_DAYS = [
   { label: '1 ngày', v: 1 }, { label: '7 ngày', v: 7 },
   { label: '30 ngày', v: 30 }, { label: 'Vĩnh viễn', v: 0 },
@@ -94,11 +94,12 @@ export default function AdminUsersClient({ initialUsers }: { initialUsers: User[
     if (isBanned) return <span className="inline-flex px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">🚫 Bị cấm</span>
     const cls: Record<string, string> = {
       ADMIN: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+      MOD: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
       AUTHOR: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
       TRANSLATOR: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
       READER: 'bg-muted text-muted-foreground',
     }
-    const names: Record<string, string> = { ADMIN: '🛡 Admin', AUTHOR: '✍ Tác giả', TRANSLATOR: '🌐 Dịch giả', READER: 'Thành viên' }
+    const names: Record<string, string> = { ADMIN: '🛡 Admin', MOD: '⚡ Mod', AUTHOR: '✍ Tác giả', TRANSLATOR: '🌐 Dịch giả', READER: 'Thành viên' }
     return <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-medium ${cls[role] || ''}`}>{names[role] || role}</span>
   }
 
