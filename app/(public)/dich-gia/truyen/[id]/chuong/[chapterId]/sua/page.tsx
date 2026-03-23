@@ -1,3 +1,5 @@
-'use client'
+import { redirect } from 'next/navigation'
 
-export { default } from '@/app/(public)/tac-gia/truyen/[id]/chuong/[chapterId]/sua/page'
+export default function Page({ params }: { params: { id: string; chapterId: string } }) {
+  redirect(`/tac-gia/truyen/${params.id}/chuong/${params.chapterId}/sua`)
+}
