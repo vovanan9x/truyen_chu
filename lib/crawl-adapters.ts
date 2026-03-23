@@ -21,6 +21,26 @@ const FETCH_HEADERS = {
 
 const _proxyAgentCache = new Map<string, any>()
 
+// Per-origin keepAlive agent pool — reuses TCP connections for same domain
+// Avoids 100-300ms TCP+TLS handshake on every chapter fetch
+const _keepAliveAgentCache = new Map<string, any>()
+async function getKeepAliveAgent(url: string): Promise<any | null> {
+  if (await getProxyAgent()) return null // proxy handles its own pooling
+  try {
+    const origin = new URL(url).origin
+    if (!_keepAliveAgentCache.has(origin)) {
+      const { Agent } = await import('undici')
+      const agent = new Agent({
+        keepAliveTimeout: 10_000,    // keep connection alive for 10s after last request
+        keepAliveMaxTimeout: 30_000, // max 30s total idle
+        connections: 15,             // max concurrent connections per origin
+      })
+      _keepAliveAgentCache.set(origin, agent)
+    }
+    return _keepAliveAgentCache.get(origin)
+  } catch { return null }
+}
+
 async function getProxyAgent() {
   const settings = await getCrawlSettings()
   const proxyUrl = getNextProxyUrl(settings.proxies)
@@ -86,6 +106,12 @@ export async function fetchUrl(url: string, timeout = 15000, cookies?: string): 
     if (proxyAgent) {
       const { fetch: undiciFetch } = await import('undici')
       return (undiciFetch as any)(url, { headers: h, signal: AbortSignal.timeout(timeout), redirect: 'follow', dispatcher: proxyAgent })
+    }
+    // Use keepAlive agent to reuse TCP connections (saves 100-300ms per request on same domain)
+    const keepAliveAgent = await getKeepAliveAgent(url)
+    if (keepAliveAgent) {
+      const { fetch: undiciFetch } = await import('undici')
+      return (undiciFetch as any)(url, { headers: h, signal: AbortSignal.timeout(timeout), redirect: 'follow', dispatcher: keepAliveAgent })
     }
     return fetch(url, { headers: h, signal: AbortSignal.timeout(timeout), redirect: 'follow' })
   }

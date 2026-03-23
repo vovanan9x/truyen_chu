@@ -311,6 +311,20 @@ async function runCrawlJob(
           addLog(jobId, `✅ ${total}/${totalInRange} ch. | import=${imported} skip=${skipped.length} fail=${failed.length} | ${elapsed}s`)
         }
 
+        // Flush to DB every 50 chapters to reduce memory & show partial results sooner
+        if (chaptersToBatchInsert.length > 0 && chaptersToBatchInsert.length % 50 === 0) {
+          const toFlush = chaptersToBatchInsert.splice(0, 50)
+          const newOnes = toFlush.filter(c => !existingMap.has(c.chapterNum))
+          const updOnes = toFlush.filter(c => existingMap.has(c.chapterNum))
+          if (newOnes.length > 0) await prisma.chapter.createMany({ data: newOnes, skipDuplicates: true }).catch(() => {})
+          if (updOnes.length > 0) {
+            await Promise.all(updOnes.map(c => prisma.chapter.update({
+              where: { storyId_chapterNum: { storyId: story.id, chapterNum: c.chapterNum } },
+              data: { content: c.content, wordCount: c.wordCount, title: c.title },
+            }).catch(() => {})))
+          }
+        }
+
         if (attempts > 1) {
           addLog(jobId, `  🔄 Ch.${ch.num}: thành công sau ${attempts} lần thử`)
         }

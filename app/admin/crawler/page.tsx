@@ -523,6 +523,8 @@ export default function AdminCrawlerPage() {
                   <div>
                     <label className={labelCls}>Delay (ms)</label>
                     <select value={batchDelay} onChange={e => setBatchDelay(parseInt(e.target.value))} className={inputCls+' w-full'}>
+                      <option value={0}>0ms (tối đa)</option>
+                      <option value={100}>100ms (rất nhanh)</option>
                       <option value={300}>300ms (nhanh)</option><option value={500}>500ms</option><option value={1000}>1000ms (chậm)</option><option value={2000}>2000ms</option>
                     </select>
                   </div>
@@ -531,9 +533,11 @@ export default function AdminCrawlerPage() {
                     <select value={concurrency} onChange={e => setConcurrency(parseInt(e.target.value))} className={inputCls+' w-full'}>
                       <option value={1}>1 (an toàn)</option>
                       <option value={3}>3</option>
-                      <option value={5}>5 (mặc định)</option>
+                      <option value={5}>5</option>
                       <option value={8}>8 (nhanh)</option>
                       <option value={10}>10 (rất nhanh)</option>
+                      <option value={15}>15 (mặc định mới)</option>
+                      <option value={20}>20 (máy chủ mạnh)</option>
                     </select>
                   </div>
                   <div className="flex items-end pb-2.5">
