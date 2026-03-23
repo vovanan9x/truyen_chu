@@ -729,22 +729,63 @@ export async function getAdapterWithDbConfig(url: string): Promise<{ adapter: Si
 
 // ─── Helper: download and save cover image to local storage ───────────────────
 
-export async function downloadAndSaveCover(imageUrl: string): Promise<string | null> {
+/**
+ * Download and save cover image locally.
+ * - Uses proxy if configured (same proxy as crawler)
+ * - Uses storyUrl as Referer (some CDNs check Referer)
+ * - Falls back to original external URL if download fails
+ *   (so story page still shows an image via Next.js remote optimization)
+ */
+export async function downloadAndSaveCover(imageUrl: string, storyUrl?: string): Promise<string | null> {
   if (!imageUrl || !imageUrl.startsWith('http')) return null
 
-  try {
-    const res = await fetch(imageUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'image/webp,image/avif,image/*,*/*',
-        'Referer': new URL(imageUrl).origin + '/',
-      },
-      signal: AbortSignal.timeout(15000),
-    })
+  const headers: Record<string, string> = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'image/webp,image/avif,image/*,*/*;q=0.8',
+    'Referer': storyUrl ?? new URL(imageUrl).origin + '/',
+    'Cache-Control': 'no-cache',
+  }
 
-    if (!res.ok) return null
+  try {
+    // Try with proxy first if configured
+    const settings = await getCrawlSettings()
+    const proxyUrl = settings.proxyUrl
+
+    let res: Response | undefined
+    if (proxyUrl) {
+      try {
+        const { ProxyAgent, fetch: undiciFetch } = await import('undici')
+        const agent = new ProxyAgent(proxyUrl)
+        res = (await (undiciFetch as any)(imageUrl, {
+          headers,
+          signal: AbortSignal.timeout(20000),
+          redirect: 'follow',
+          dispatcher: agent,
+        })) as Response
+      } catch {
+        // Proxy failed — try direct
+      }
+    }
+
+    if (!res || !res.ok) {
+      res = await fetch(imageUrl, {
+        headers,
+        signal: AbortSignal.timeout(15000),
+        redirect: 'follow',
+      })
+    }
+
+    if (!res.ok) {
+      console.warn(`[Cover] ⚠️ Failed to download ${imageUrl} — status ${res.status}. Storing external URL.`)
+      return imageUrl  // fallback: store original URL, Next.js will serve it via remote optimization
+    }
 
     const contentType = res.headers.get('content-type') ?? ''
+    // Verify it's actually an image
+    if (contentType && !contentType.startsWith('image/') && !contentType.includes('octet-stream')) {
+      return imageUrl
+    }
+
     let ext = 'jpg'
     if (contentType.includes('png')) ext = 'png'
     else if (contentType.includes('webp')) ext = 'webp'
@@ -763,11 +804,14 @@ export async function downloadAndSaveCover(imageUrl: string): Promise<string | n
     await mkdir(uploadDir, { recursive: true })
 
     const bytes = await res.arrayBuffer()
-    if (bytes.byteLength < 100) return null
+    if (bytes.byteLength < 100) return imageUrl  // fallback to external URL
 
     await writeFile(join(uploadDir, filename), Buffer.from(bytes))
+    console.log(`[Cover] ✅ Saved ${filename} (${bytes.byteLength} bytes)`)
     return `/uploads/${filename}`
-  } catch {
-    return null
+
+  } catch (e: any) {
+    console.warn(`[Cover] ⚠️ Error downloading cover: ${e?.message}. Storing external URL.`)
+    return imageUrl  // fallback: store original URL
   }
 }
