@@ -22,7 +22,16 @@ export const authConfig: NextAuthConfig = {
       // Protect /admin/*
       if (pathname.startsWith('/admin')) {
         if (!isLoggedIn) return Response.redirect(new URL('/dang-nhap', nextUrl))
-        if (auth?.user?.role !== 'ADMIN') return Response.redirect(new URL('/', nextUrl))
+        const role = auth?.user?.role
+        if (role !== 'ADMIN' && role !== 'MOD') return Response.redirect(new URL('/', nextUrl))
+        // Các section chỉ ADMIN được phép
+        const adminOnlySections = ['cai-dat', 'giao-dich', 'rut-xu', 'nap-xu', 'loi-he-thong', 'nang-cap-tai-khoan']
+        if (role === 'MOD') {
+          const section = pathname.split('/')[2] ?? ''
+          if (adminOnlySections.includes(section)) {
+            return Response.redirect(new URL('/admin?forbidden=1', nextUrl))
+          }
+        }
       }
 
       // Protect /tac-gia/* — chỉ AUTHOR và ADMIN

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
+import { getAdminSession } from '@/lib/permissions'
 import { z } from 'zod'
 
 const schema = z.object({
@@ -15,14 +15,10 @@ const schema = z.object({
   sourceName: z.string().optional(),
 })
 
-async function isAdmin(req: NextRequest) {
-  const session = await auth()
-  return session?.user?.role === 'ADMIN'
-}
-
 // CREATE
 export async function POST(req: NextRequest) {
-  if (!(await isAdmin(req))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const { isAdminOrMod } = await getAdminSession()
+  if (!isAdminOrMod) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const body = await req.json()
   const parsed = schema.safeParse(body)
@@ -56,7 +52,8 @@ export async function POST(req: NextRequest) {
 
 // LIST
 export async function GET(req: NextRequest) {
-  if (!(await isAdmin(req))) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  const { isAdminOrMod } = await getAdminSession()
+  if (!isAdminOrMod) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const sp = req.nextUrl.searchParams
   const q = sp.get('q') ?? ''

@@ -16,6 +16,7 @@ enum Role {
   READER
   AUTHOR
   TRANSLATOR
+  MOD
   ADMIN
 }
 
@@ -120,6 +121,7 @@ model User {
   notifications   Notification[]
   roleRequests    RoleRequest[]
   withdrawRequests WithdrawRequest[]
+  modRequests     ModRequest[]     @relation("ModRequests")
   ownedStories    Story[]          @relation("StoryOwner")
 
   // Follow system
@@ -610,4 +612,40 @@ model ErrorLog {
   @@index([resolved, createdAt])
   @@index([createdAt])
   @@map("error_logs")
+}
+
+// ─── Mod Request (action cần admin duyệt) ─────────────────────────────────────
+
+enum ModRequestType {
+  DELETE_STORY
+  EDIT_USER
+  BAN_USER
+}
+
+enum ModRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ModRequest {
+  id          String           @id @default(cuid())
+  modId       String
+  type        ModRequestType
+  targetId    String           // storyId hoặc userId
+  targetName  String?          // tên truyện hoặc user (cache hiển thị)
+  payload     Json?            // data thay đổi (EDIT_USER / BAN_USER)
+  reason      String?          @db.Text
+  status      ModRequestStatus @default(PENDING)
+  adminNote   String?          @db.Text
+  reviewedBy  String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  mod User @relation("ModRequests", fields: [modId], references: [id], onDelete: Cascade)
+
+  @@index([modId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("mod_requests")
 }

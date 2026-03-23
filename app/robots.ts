@@ -6,6 +6,6 @@ export default function robots(): MetadataRoute.Robots {
     rules: [
       { userAgent: '*', allow: '/', disallow: ['/admin/', '/api/', '/tai-khoan/'] },
     ],
-    sitemap: `${BASE_URL}/sitemap.xml`,
+    sitemap: `${BASE_URL}/sitemap-index`,
   }
 }

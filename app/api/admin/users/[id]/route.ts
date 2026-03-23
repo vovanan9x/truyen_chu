@@ -10,6 +10,16 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     where: { id: params.id },
     include: {
       transactions: { take: 20, orderBy: { createdAt: 'desc' } },
+      readingHistory: {
+        take: 20,
+        orderBy: { updatedAt: 'desc' },
+        include: { story: { select: { title: true, slug: true } } },
+      },
+      bookmarks: {
+        take: 20,
+        orderBy: { createdAt: 'desc' },
+        include: { story: { select: { title: true, slug: true } } },
+      },
       _count: { select: { bookmarks: true, readingHistory: true, comments: true } },
     },
   })
@@ -17,6 +27,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
   const { passwordHash, ...safe } = user
   return NextResponse.json(safe)
 }
+
 
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   if (!(await isAdmin())) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
