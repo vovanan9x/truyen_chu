@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { formatDate, formatNumber } from '@/lib/utils'
 
-const ROLE_OPTIONS = ['READER', 'AUTHOR', 'TRANSLATOR', 'ADMIN']
+const ROLE_OPTIONS = ['READER', 'AUTHOR', 'TRANSLATOR', 'MOD', 'ADMIN']
 const BAN_DAYS = [
   { label: '1 ngày', v: 1 }, { label: '7 ngày', v: 7 },
   { label: '30 ngày', v: 30 }, { label: 'Vĩnh viễn', v: 0 },
@@ -110,11 +110,12 @@ export default function AdminUserDetailPage({ params }: { params: { id: string }
   const inputCls = 'px-4 py-2.5 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm'
   const roleCls: Record<string, string> = {
     ADMIN: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+    MOD: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400',
     AUTHOR: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
     TRANSLATOR: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400',
     READER: 'bg-muted text-muted-foreground',
   }
-  const roleNames: Record<string, string> = { ADMIN: '🛡 Admin', AUTHOR: '✍ Tác giả', TRANSLATOR: '🌐 Dịch giả', READER: 'Thành viên' }
+  const roleNames: Record<string, string> = { ADMIN: '🛡 Admin', MOD: '🔰 Mod', AUTHOR: '✍ Tác giả', TRANSLATOR: '🌐 Dịch giả', READER: 'Thành viên' }
   const genderMap: Record<string, string> = { MALE: 'Nam', FEMALE: 'Nữ', OTHER: 'Khác' }
 
   return (
