@@ -5,7 +5,7 @@
 
 import * as cheerio from 'cheerio'
 import { getCrawlSettings } from './crawl-settings'
-import { getBypassCookie, getCachedBypassCookie, invalidateBypassCookie } from './playwright-bypass'
+import { fetchUrlWithPlaywright, invalidateBypassContext, hasActiveContext } from './playwright-bypass'
 
 const FETCH_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -93,28 +93,19 @@ export async function fetchUrl(url: string, timeout = 15000, cookies?: string): 
 
   let res = await doFetch(cookies)
 
-  // On 403 → try Playwright bypass if enabled
+  // On 403 → use Playwright to fetch HTML directly (bypasses TLS fingerprint issue)
   if (res.status === 403) {
     const settings = await getCrawlSettings()
-
-    // Check if we have a cached bypass cookie first
-    let bypassCookie = getCachedBypassCookie(url)
-    if (!bypassCookie && settings.usePlaywright) {
-      console.log(`[fetchUrl] 403 from ${url} — launching Playwright...`)
-      bypassCookie = await getBypassCookie(url, settings)
-    }
-
-    if (bypassCookie) {
-      const combined = cookies ? `${bypassCookie}; ${cookies}` : bypassCookie
-      res = await doFetch(combined)
-      // If still failing, invalidate the cached cookie
-      if (res.status === 403) {
-        invalidateBypassCookie(url)
-        throw new Error(`HTTP 403 — Playwright bypass failed for ${new URL(url).hostname}`)
+    if (settings.usePlaywright) {
+      console.log(`[fetchUrl] 403 from ${url} — using Playwright to fetch HTML directly...`)
+      try {
+        return await fetchUrlWithPlaywright(url, settings)
+      } catch (e: any) {
+        await invalidateBypassContext(url)
+        throw new Error(`Playwright bypass failed for ${new URL(url).hostname}: ${e?.message}`)
       }
-    } else {
-      throw new Error(`HTTP 403 ${res.statusText} — ${new URL(url).hostname} blocked (enable Playwright bypass in admin settings)`)
     }
+    throw new Error(`HTTP 403 — ${new URL(url).hostname} blocked by Cloudflare (bật Playwright bypass trong Admin → Crawl truyện → Proxy & Bypass)`)
   }
 
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
