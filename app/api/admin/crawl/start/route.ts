@@ -159,14 +159,28 @@ async function runCrawlJob(
       addLog(jobId, `✅ Tạo truyện mới: slug="${slug}"`)
     }
 
-    // Genre linking
+    // Genre linking — upsert genres that don't exist yet, then link all
     if (info.genres.length > 0) {
-      const dbGenres = await prisma.genre.findMany({ where: { name: { in: info.genres } } })
-      if (dbGenres.length > 0) {
-        await prisma.storyGenre.createMany({ data: dbGenres.map(g => ({ storyId: story.id, genreId: g.id })), skipDuplicates: true })
-        addLog(jobId, `🏷️ Gán ${dbGenres.length}/${info.genres.length} thể loại`)
-      }
+      const genreRecords = await Promise.all(
+        info.genres
+          .map(name => name.trim())
+          .filter(name => name.length > 0)
+          .map(name => {
+            const genreSlug = slugify(name)
+            return prisma.genre.upsert({
+              where: { slug: genreSlug },
+              create: { name, slug: genreSlug },
+              update: {}, // giữ nguyên nếu đã tồn tại
+            })
+          })
+      )
+      await prisma.storyGenre.createMany({
+        data: genreRecords.map(g => ({ storyId: story.id, genreId: g.id })),
+        skipDuplicates: true,
+      })
+      addLog(jobId, `🏷️ Gán ${genreRecords.length}/${info.genres.length} thể loại: ${genreRecords.map(g => g.name).join(', ')}`)
     }
+
     updateJob(jobId, { storyTitle: info.title, storyId: story.id })
 
     // 4. Collect all chapters
