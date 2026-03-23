@@ -5,7 +5,7 @@
 
 import * as cheerio from 'cheerio'
 import { getCrawlSettings } from './crawl-settings'
-import { fetchUrlWithPlaywright, invalidateBypassContext, hasActiveContext } from './playwright-bypass'
+import { fetchUrlWithPlaywright, invalidateBypassContext, hasActiveContext, getNextProxyUrl } from './playwright-bypass'
 
 const FETCH_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -15,34 +15,33 @@ const FETCH_HEADERS = {
   'Pragma': 'no-cache',
 }
 
-// ─── Proxy Agent (undici, built into Node.js 18+) ─────────────────────────────
-// Proxy URL is read from DB settings (crawl_proxy_host/port/user/pass)
-// or falls back to CRAWL_PROXY_URL env variable.
+// ─── Proxy Agent Pool (undici, built into Node.js 18+) ────────────────────────
+// Supports multiple proxies via round-robin.
+// Proxy list is read from DB settings (crawl_proxy_list) or single proxy fields.
 
-let _proxyAgent: any = undefined
-let _proxyAgentUrl: string | null = null
+const _proxyAgentCache = new Map<string, any>()
 
 async function getProxyAgent() {
   const settings = await getCrawlSettings()
-  const proxyUrl = settings.proxyUrl
-
-  // Reset agent if proxy URL changed
-  if (_proxyAgentUrl !== proxyUrl) {
-    _proxyAgent = undefined
-    _proxyAgentUrl = proxyUrl
-  }
-
+  const proxyUrl = getNextProxyUrl(settings.proxies)
   if (!proxyUrl) return null
-  if (_proxyAgent) return _proxyAgent
+
+  if (_proxyAgentCache.has(proxyUrl)) return _proxyAgentCache.get(proxyUrl)
 
   try {
     const { ProxyAgent } = await import('undici')
-    _proxyAgent = new ProxyAgent(proxyUrl)
-    console.log('[Crawler] 🔀 Proxy enabled:', proxyUrl.replace(/:([^:@]+)@/, ':***@'))
+    const agent = new ProxyAgent(proxyUrl)
+    _proxyAgentCache.set(proxyUrl, agent)
+    if (settings.proxies.length > 1) {
+      console.log(`[Crawler] 🔀 Proxy pool (${settings.proxies.length}), using: ${proxyUrl.replace(/:([^:@]+)@/, ':***@')}`)
+    } else {
+      console.log('[Crawler] 🔀 Proxy enabled:', proxyUrl.replace(/:([^:@]+)@/, ':***@'))
+    }
+    return agent
   } catch (e) {
     console.warn('[Crawler] ⚠️ Could not init proxy agent:', e)
+    return null
   }
-  return _proxyAgent
 }
 
 export interface StoryInfo {

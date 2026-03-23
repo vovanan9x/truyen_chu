@@ -179,10 +179,7 @@ export default function AdminCrawlerPage() {
   const [dbLogsTotal, setDbLogsTotal] = useState(0)
 
   // --- Proxy tab ---
-  const [proxyHost, setProxyHost] = useState('')
-  const [proxyPort, setProxyPort] = useState('10000')
-  const [proxyUser, setProxyUser] = useState('')
-  const [proxyPass, setProxyPass] = useState('')
+  const [proxyList, setProxyList] = useState('')   // newline-separated proxy URLs
   const [usePlaywright, setUsePlaywright] = useState(false)
   const [proxyLoading, setProxyLoading] = useState(false)
   const [proxySaving, setProxySaving] = useState(false)
@@ -289,10 +286,14 @@ export default function AdminCrawlerPage() {
       const res = await fetch('/api/admin/settings')
       if (res.ok) {
         const d = await res.json()
-        setProxyHost(d.crawl_proxy_host ?? '')
-        setProxyPort(d.crawl_proxy_port ?? '10000')
-        setProxyUser(d.crawl_proxy_user ?? '')
-        setProxyPass(d.crawl_proxy_pass ?? '')
+        // Load proxy list (new format)
+        let list = d.crawl_proxy_list ?? ''
+        // Backward compat: build from old single proxy fields
+        if (!list && d.crawl_proxy_host) {
+          const { crawl_proxy_host: h, crawl_proxy_port: p, crawl_proxy_user: u, crawl_proxy_pass: pw } = d
+          list = (u && pw) ? `http://${u}:${pw}@${h}:${p || 10000}` : `http://${h}:${p || 10000}`
+        }
+        setProxyList(list)
         setUsePlaywright(d.crawl_use_playwright === '1')
       }
     } finally { setProxyLoading(false) }
@@ -305,10 +306,7 @@ export default function AdminCrawlerPage() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          crawl_proxy_host: proxyHost,
-          crawl_proxy_port: proxyPort,
-          crawl_proxy_user: proxyUser,
-          crawl_proxy_pass: proxyPass,
+          crawl_proxy_list: proxyList,
           crawl_use_playwright: usePlaywright ? '1' : '',
         }),
       })
@@ -318,15 +316,25 @@ export default function AdminCrawlerPage() {
   }
 
   async function testProxy() {
+    // Test the first proxy in the list
+    const firstLine = proxyList.split('\n').map(s => s.trim()).find(s => s.startsWith('http'))
+    if (!firstLine) { setProxyTestResult({ ok: false, error: 'Chưa có proxy nào' }); return }
     setTestingProxy(true); setProxyTestResult(null)
     try {
+      // Parse proxy URL
+      const u = new URL(firstLine)
       const res = await fetch('/api/admin/crawler/test-proxy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ host: proxyHost, port: proxyPort, user: proxyUser, pass: proxyPass }),
+        body: JSON.stringify({
+          host: u.hostname,
+          port: u.port || '10000',
+          user: decodeURIComponent(u.username),
+          pass: decodeURIComponent(u.password),
+        }),
       })
       setProxyTestResult(await res.json())
-    } catch { setProxyTestResult({ ok: false, error: 'Lỗi kết nối' }) }
+    } catch (e: any) { setProxyTestResult({ ok: false, error: e?.message ?? 'Lỗi kết nối' }) }
     setTestingProxy(false)
   }
 
@@ -1250,45 +1258,41 @@ export default function AdminCrawlerPage() {
           ) : (
             <>
               <div className="p-5 rounded-2xl border border-border bg-card space-y-4">
-                <div>
-                  <h2 className="font-semibold flex items-center gap-2"><Wifi className="w-4 h-4 text-blue-500" /> Cấu hình Proxy</h2>
-                  <p className="text-xs text-muted-foreground mt-1">Route request crawler qua proxy IP để bypass block IP datacenter của VPS.</p>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="font-semibold flex items-center gap-2"><Wifi className="w-4 h-4 text-blue-500" /> Proxy Pool</h2>
+                    <p className="text-xs text-muted-foreground mt-1">Mỗi dòng 1 proxy URL. Crawler sẽ phân phối đều qua tất cả proxy (round-robin).</p>
+                  </div>
+                  {proxyList.split('\n').filter(s => s.trim().startsWith('http')).length > 0 && (
+                    <span className="flex-shrink-0 px-2.5 py-1 rounded-full bg-blue-500/10 text-blue-600 text-xs font-semibold">
+                      {proxyList.split('\n').filter(s => s.trim().startsWith('http')).length} proxy
+                    </span>
+                  )}
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="col-span-2 sm:col-span-1">
-                    <label className={labelCls}>Proxy Host</label>
-                    <input value={proxyHost} onChange={e => setProxyHost(e.target.value)}
-                      placeholder="proxy.webshare.io" className={inputCls + ' w-full font-mono'} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Port</label>
-                    <input value={proxyPort} onChange={e => setProxyPort(e.target.value)}
-                      placeholder="10000" className={inputCls + ' w-full font-mono'} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Username</label>
-                    <input value={proxyUser} onChange={e => setProxyUser(e.target.value)}
-                      placeholder="user" autoComplete="off" className={inputCls + ' w-full'} />
-                  </div>
-                  <div>
-                    <label className={labelCls}>Password</label>
-                    <input type="password" value={proxyPass} onChange={e => setProxyPass(e.target.value)}
-                      placeholder="••••••••" autoComplete="new-password" className={inputCls + ' w-full'} />
-                  </div>
+                <div>
+                  <label className={labelCls}>Danh sách proxy (mỗi dòng 1 URL)</label>
+                  <textarea
+                    value={proxyList}
+                    onChange={e => setProxyList(e.target.value)}
+                    rows={6}
+                    placeholder={"http://user:pass@proxy1.host:10000\nhttp://user:pass@proxy2.host:10000\nhttp://user:pass@proxy3.host:10000"}
+                    className={inputCls + ' w-full font-mono text-xs resize-y'}
+                  />
+                  <p className="text-xs text-muted-foreground mt-1">Format: <code className="bg-muted px-1 rounded">http://username:password@host:port</code></p>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
-                  <button onClick={testProxy} disabled={testingProxy || !proxyHost}
+                  <button onClick={testProxy} disabled={testingProxy || !proxyList.trim()}
                     className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border hover:bg-muted text-sm font-medium transition-colors disabled:opacity-50">
                     {testingProxy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
-                    {testingProxy ? 'Đang test...' : 'Test kết nối'}
+                    {testingProxy ? 'Đang test...' : 'Test proxy đầu tiên'}
                   </button>
                   {proxyTestResult && (
                     <div className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg ${
                       proxyTestResult.ok ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'
                     }`}>
                       {proxyTestResult.ok
-                        ? <><Wifi className="w-4 h-4" /> IP qua proxy: <strong>{proxyTestResult.ip}</strong></>
-                        : <><WifiOff className="w-4 h-4" /> Lỗi: {proxyTestResult.error}</>}
+                        ? <><Wifi className="w-4 h-4" /> IP: <strong>{proxyTestResult.ip}</strong></>
+                        : <><WifiOff className="w-4 h-4" /> {proxyTestResult.error}</>}
                     </div>
                   )}
                 </div>

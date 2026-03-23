@@ -1,25 +1,50 @@
 /**
  * Playwright bypass — dùng Chromium headless để lấy nội dung trang bị Cloudflare chặn.
  *
- * Thay vì chỉ lấy cookie rồi dùng fetch() (bị block do TLS fingerprint),
- * ta dùng Playwright để lấy LUÔN HTML — Cloudflare thấy Chrome thật, không block được.
+ * **Proxy Pool support:**
+ * - Mỗi domain được gán 1 proxy cố định (stable hash) → giữ cf session theo IP
+ * - Nhiều domain có thể chạy song song trên các proxy khác nhau
+ * - BrowserContext được cache 23h per (domain × proxy)
  *
- * Cache: giữ browser context (cookies) theo domain 23 tiếng để tái sử dụng.
+ * Không dùng cookie extraction — lấy thẳng HTML qua Playwright
+ * để bypass cả IP block lẫn TLS fingerprint detection.
  */
 
 import type { CrawlSettings } from './crawl-settings'
 
-interface ContextCache {
+interface ContextEntry {
   context: any   // Playwright BrowserContext
   browser: any   // Playwright Browser
+  proxyUrl: string | null
   expiresAt: number
 }
 
-const contextCache = new Map<string, ContextCache>()
+// Key: domain
+const contextCache = new Map<string, ContextEntry>()
 const CONTEXT_TTL = 23 * 60 * 60 * 1000 // 23 giờ
+
+// Round-robin counter cho fetch thường (không Playwright)
+let _rrIndex = 0
 
 function getDomain(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, '') } catch { return url }
+}
+
+/** Chọn proxy ổn định cho domain (hash domain → index trong pool) */
+function pickProxyForDomain(domain: string, proxies: string[]): string | null {
+  if (!proxies.length) return null
+  // Simple stable hash: sum of char codes % pool size
+  let hash = 0
+  for (let i = 0; i < domain.length; i++) hash = (hash * 31 + domain.charCodeAt(i)) & 0x7fffffff
+  return proxies[hash % proxies.length]
+}
+
+/** Round-robin proxy cho fetch thông thường */
+export function getNextProxyUrl(proxies: string[]): string | null {
+  if (!proxies.length) return null
+  const url = proxies[_rrIndex % proxies.length]
+  _rrIndex++
+  return url
 }
 
 /** Xoá cache context của một domain */
@@ -29,20 +54,51 @@ export async function invalidateBypassContext(url: string) {
   if (cached) {
     try { await cached.browser.close() } catch { /* ignore */ }
     contextCache.delete(domain)
+    console.log(`[Playwright] 🗑️ Invalidated context for ${domain}`)
   }
 }
 
-/** Lấy hoặc tạo BrowserContext cho domain (reuse để giữ session Cloudflare) */
+/** Kiểm tra domain có đang có context cached không */
+export function hasActiveContext(url: string): boolean {
+  const domain = getDomain(url)
+  const cached = contextCache.get(domain)
+  return !!cached && Date.now() < cached.expiresAt
+}
+
+/** Build proxy launchOptions cho Playwright */
+function buildProxyOption(proxyUrl: string | null): any {
+  if (!proxyUrl) return {}
+  try {
+    const u = new URL(proxyUrl)
+    return {
+      proxy: {
+        server: `${u.protocol}//${u.hostname}:${u.port}`,
+        ...(u.username ? { username: decodeURIComponent(u.username) } : {}),
+        ...(u.password ? { password: decodeURIComponent(u.password) } : {}),
+      }
+    }
+  } catch {
+    return {}
+  }
+}
+
+/** Lấy hoặc tạo BrowserContext cho domain (stable proxy from pool) */
 async function getOrCreateContext(domain: string, settings: CrawlSettings) {
   const cached = contextCache.get(domain)
   if (cached && Date.now() < cached.expiresAt) {
     return { context: cached.context, browser: cached.browser, isNew: false }
   }
 
-  // Close old browser if exists
   if (cached) {
     try { await cached.browser.close() } catch { /* ignore */ }
     contextCache.delete(domain)
+  }
+
+  // Pick stable proxy for this domain
+  const proxyUrl = pickProxyForDomain(domain, settings.proxies)
+  if (proxyUrl) {
+    const masked = proxyUrl.replace(/:([^:@]+)@/, ':***@')
+    console.log(`[Playwright] 🔀 Domain "${domain}" → proxy: ${masked}`)
   }
 
   const { chromium } = await import('playwright')
@@ -54,20 +110,8 @@ async function getOrCreateContext(domain: string, settings: CrawlSettings) {
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-blink-features=AutomationControlled',
-      '--disable-web-security',
     ],
-  }
-
-  if (settings.proxyUrl) {
-    try {
-      const u = new URL(settings.proxyUrl)
-      launchOptions.proxy = {
-        server: `${u.protocol}//${u.hostname}:${u.port}`,
-        ...(u.username ? { username: decodeURIComponent(u.username) } : {}),
-        ...(u.password ? { password: decodeURIComponent(u.password) } : {}),
-      }
-      console.log(`[Playwright] 🔀 Proxy: ${u.hostname}:${u.port}`)
-    } catch { /* invalid proxy url */ }
+    ...buildProxyOption(proxyUrl),
   }
 
   const browser = await chromium.launch(launchOptions)
@@ -78,61 +122,58 @@ async function getOrCreateContext(domain: string, settings: CrawlSettings) {
     extraHTTPHeaders: {
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
       'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
       'Cache-Control': 'no-cache',
     },
   })
 
-  // Ẩn webdriver flag
   await context.addInitScript(() => {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
     ;(window as any).chrome = { runtime: {} }
   })
 
-  contextCache.set(domain, { context, browser, expiresAt: Date.now() + CONTEXT_TTL })
+  contextCache.set(domain, { context, browser, proxyUrl, expiresAt: Date.now() + CONTEXT_TTL })
   return { context, browser, isNew: true }
 }
 
 /**
- * fetchUrlWithPlaywright — dùng Playwright để lấy HTML trang.
- * Tái sử dụng browser context (giữ session Cloudflare 23h).
+ * fetchUrlWithPlaywright — navigate to URL and return HTML.
+ * Reuses BrowserContext (keeps Cloudflare session alive 23h).
+ * Stable proxy assignment per domain from pool.
  */
 export async function fetchUrlWithPlaywright(url: string, settings: CrawlSettings): Promise<string> {
   const domain = getDomain(url)
   console.log(`[Playwright] 🚀 Fetching ${url}`)
 
-  let { context, browser, isNew } = await getOrCreateContext(domain, settings)
+  const { context, isNew } = await getOrCreateContext(domain, settings)
 
   const page = await context.newPage()
   try {
-    // Navigate to URL
     try {
       await page.goto(url, { waitUntil: 'networkidle', timeout: 25000 })
     } catch {
-      // timeout OK — page might have loaded enough
+      // timeout is OK — page may have loaded enough
     }
 
-    // Nếu context mới, đợi Cloudflare challenge
+    // If brand new context, wait for Cloudflare challenge to resolve
     if (isNew) {
       const title = await page.title().catch(() => '')
       if (title.includes('Just a moment') || title.includes('Checking') || title === '') {
         console.log(`[Playwright] ⏳ Waiting for Cloudflare challenge...`)
         await page.waitForTimeout(8000)
-        // Try navigating again
         try { await page.reload({ waitUntil: 'networkidle', timeout: 15000 }) } catch { /* ok */ }
       }
     }
 
-    // Kiểm tra có bị block không
-    const status = page.url()
     const finalTitle = await page.title().catch(() => '')
     if (finalTitle.includes('Just a moment') || finalTitle.includes('Checking')) {
-      console.log(`[Playwright] ⚠️ Still on challenge page: ${finalTitle}`)
       await page.waitForTimeout(5000)
     }
 
     const html = await page.content()
-    console.log(`[Playwright] ✅ Got HTML for ${domain} (${html.length} chars)`)
+    const poolInfo = settings.proxies.length > 1
+      ? ` [proxy pool: ${settings.proxies.length} proxies]`
+      : settings.proxies.length === 1 ? ' [proxy]' : ' [no proxy]'
+    console.log(`[Playwright] ✅ Got HTML for ${domain} (${html.length} chars)${poolInfo}`)
     return html
 
   } finally {
@@ -140,25 +181,13 @@ export async function fetchUrlWithPlaywright(url: string, settings: CrawlSetting
   }
 }
 
-/** Dùng Playwright context đã có để fetch thêm URL cùng domain (dùng cookies session) */
-export async function fetchAnotherPageWithPlaywright(url: string, domain: string): Promise<string> {
-  const cached = contextCache.get(domain)
-  if (!cached || Date.now() >= cached.expiresAt) {
-    throw new Error(`No active Playwright context for ${domain}`)
-  }
-
-  const page = await cached.context.newPage()
-  try {
-    try { await page.goto(url, { waitUntil: 'networkidle', timeout: 20000 }) } catch { /* ok */ }
-    return await page.content()
-  } finally {
-    await page.close().catch(() => { /* ignore */ })
-  }
-}
-
-/** Kiểm tra domain có đang có context cached không */
-export function hasActiveContext(url: string): boolean {
-  const domain = getDomain(url)
-  const cached = contextCache.get(domain)
-  return !!cached && Date.now() < cached.expiresAt
+/** Proxy pool status — dùng cho admin diagnostics */
+export function getProxyPoolStatus() {
+  const now = Date.now()
+  return Array.from(contextCache.entries()).map(([domain, entry]) => ({
+    domain,
+    proxyUrl: entry.proxyUrl?.replace(/:([^:@]+)@/, ':***@') ?? null,
+    expiresIn: Math.round((entry.expiresAt - now) / 60000), // minutes
+    alive: now < entry.expiresAt,
+  }))
 }
