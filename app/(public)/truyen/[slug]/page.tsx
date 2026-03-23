@@ -2,6 +2,7 @@ import { Metadata } from 'next'
 import Image from 'next/image'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { unstable_noStore as noStore } from 'next/cache'
 import { BookOpen, Eye, CheckCircle, Clock, AlertCircle, Lock } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
 import { getSiteSettings, isAdEnabled, getAdCode } from '@/lib/site-settings'
@@ -54,6 +55,7 @@ export default async function StoryDetailPage({
   params: { slug: string }
   searchParams: { page?: string }
 }) {
+  noStore()  // Always fetch fresh data — no static caching for story page
   const story = await prisma.story.findUnique({
     where: { slug: params.slug },
     include: {

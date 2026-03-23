@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { randomUUID } from 'crypto'
+import { revalidatePath } from 'next/cache'
 import { createJob, updateJob, addLog, isCancelled } from '@/lib/crawl-jobs'
 import { getAdapterWithDbConfig, fetchUrl, countWordsInHtml, downloadAndSaveCover } from '@/lib/crawl-adapters'
 import type { ChapterRef } from '@/lib/crawl-adapters'
@@ -342,6 +343,15 @@ async function runCrawlJob(
         }, 0)
       }
       addLog(jobId, `✅ DB: ${newChapters.length} mới + ${updateChapters.length} cập nhật`)
+
+      // Invalidate Next.js cache so new chapters show immediately on frontend
+      try {
+        revalidatePath(`/truyen/${slug}`)
+        revalidatePath(`/truyen/${slug}`, 'page')
+        revalidatePath('/truyen', 'page')
+        revalidatePath('/', 'page')
+        addLog(jobId, `🔄 Cache cleared: /truyen/${slug}`)
+      } catch { /* revalidatePath may fail in some environments */ }
     }
 
     // 8. Final summary
