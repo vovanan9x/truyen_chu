@@ -256,11 +256,47 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
       }
 
       const genres: string[] = []
-      const genreSel = cfg.genreSelector || 'a[href*="the-loai"], a[href*="genre"], a[href*="category"], [itemprop="genre"]'
-      $(genreSel).each((_, el) => {
-        const g = $(el).text().trim()
-        if (g && g.length >= 2 && g.length <= 40 && !genres.includes(g)) genres.push(g)
-      })
+
+      // 1. Try specific-container selectors first (avoids nav menu pollution)
+      const specificSelectors = [
+        cfg.genreSelector,                          // DB-configured selector first
+        '.li--genres a',                            // metruyenchu.com.vn
+        '.detail-genres a',                         // many generic sites
+        '.info-genres a',
+        'li[class*="genre"] a',
+        'ul.info li a[href*="/the-loai/"]',
+        '.book-info a[href*="/the-loai/"]',
+        '.story-info a[href*="/the-loai/"]',
+        '.info a[href*="/the-loai/"]',
+        '.detail-info a[href*="/the-loai/"]',
+        'table.desc a[href*="/the-loai/"]',
+        '[itemprop="genre"]',
+      ].filter(Boolean) as string[]
+
+      for (const sel of specificSelectors) {
+        const found: string[] = []
+        $(sel).each((_, el) => {
+          const g = $(el).text().trim()
+          if (g && g.length >= 2 && g.length <= 40 && !found.includes(g)) found.push(g)
+        })
+        if (found.length > 0) {
+          found.forEach(g => { if (!genres.includes(g)) genres.push(g) })
+          break
+        }
+      }
+
+      // 2. Broad fallback only if nothing found from specific containers (limit to 12)
+      if (genres.length === 0) {
+        let count = 0
+        $('a[href*="the-loai"], a[href*="/genre/"], a[href*="/category/"]').each((_, el) => {
+          if (count >= 12) return false
+          const g = $(el).text().trim()
+          if (g && g.length >= 2 && g.length <= 35 && !genres.includes(g)) {
+            genres.push(g); count++
+          }
+        })
+      }
+
 
       const bodyText = $('body').text().toLowerCase()
       const status: StoryInfo['status'] =
