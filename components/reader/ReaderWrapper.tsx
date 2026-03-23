@@ -21,13 +21,11 @@ const STORAGE_KEY = 'truyen-reader-settings'
 interface ReaderSettingsData {
   fontSize: number
   fontFamily: 'serif' | 'sans-serif'
-  theme: 'light' | 'dark' | 'sepia'
 }
 
 const DEFAULT_SETTINGS: ReaderSettingsData = {
   fontSize: 17,
   fontFamily: 'serif',
-  theme: 'light',
 }
 
 export default function ReaderWrapper({
@@ -73,14 +71,6 @@ export default function ReaderWrapper({
     }).catch(() => {})
   }, [session, storyId, chapterId, chapterNum])
 
-  // Apply theme to html element
-  useEffect(() => {
-    if (!mounted) return
-    const html = document.documentElement
-    html.classList.remove('dark', 'sepia')
-    if (settings.theme === 'dark') html.classList.add('dark')
-    if (settings.theme === 'sepia') html.classList.add('sepia')
-  }, [settings.theme, mounted])
 
   const updateSettings = useCallback((partial: Partial<ReaderSettingsData>) => {
     setSettings((prev) => {
@@ -149,10 +139,8 @@ export default function ReaderWrapper({
       <ReaderSettings
         fontSize={settings.fontSize}
         fontFamily={settings.fontFamily}
-        theme={settings.theme}
         onFontSizeChange={(size) => updateSettings({ fontSize: size })}
         onFontFamilyChange={(family) => updateSettings({ fontFamily: family })}
-        onThemeChange={(theme) => updateSettings({ theme })}
       />
     </>
   )

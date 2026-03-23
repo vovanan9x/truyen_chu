@@ -1,30 +1,21 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
-import { Settings, Sun, Moon, Coffee, Type, Minus, Plus, X } from 'lucide-react'
+import { useState } from 'react'
+import { Settings, Type, Minus, Plus, X } from 'lucide-react'
 
 interface ReaderSettingsProps {
   fontSize: number
   fontFamily: 'serif' | 'sans-serif'
-  theme: 'light' | 'dark' | 'sepia'
   onFontSizeChange: (size: number) => void
   onFontFamilyChange: (family: 'serif' | 'sans-serif') => void
-  onThemeChange: (theme: 'light' | 'dark' | 'sepia') => void
 }
 
-const THEME_OPTIONS = [
-  { value: 'light' as const, label: 'Sáng', icon: Sun, bg: 'bg-white', border: 'border-gray-300' },
-  { value: 'dark' as const, label: 'Tối', icon: Moon, bg: 'bg-gray-900', border: 'border-gray-700' },
-  { value: 'sepia' as const, label: 'Sepia', icon: Coffee, bg: 'bg-amber-50', border: 'border-amber-300' },
-]
 
 export default function ReaderSettings({
   fontSize,
   fontFamily,
-  theme,
   onFontSizeChange,
   onFontFamilyChange,
-  onThemeChange,
 }: ReaderSettingsProps) {
   const [open, setOpen] = useState(false)
 
@@ -110,31 +101,6 @@ export default function ReaderSettings({
               </div>
             </div>
 
-            {/* Theme */}
-            <div>
-              <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 block">Giao diện</label>
-              <div className="grid grid-cols-3 gap-2">
-                {THEME_OPTIONS.map((t) => {
-                  const Icon = t.icon
-                  return (
-                    <button
-                      key={t.value}
-                      onClick={() => onThemeChange(t.value)}
-                      className={`flex flex-col items-center gap-1.5 py-2.5 rounded-xl border-2 transition-all ${
-                        theme === t.value
-                          ? 'border-primary'
-                          : 'border-border hover:border-muted-foreground/30'
-                      }`}
-                    >
-                      <div className={`w-6 h-6 rounded-full border ${t.bg} ${t.border} flex items-center justify-center`}>
-                        <Icon className="w-3 h-3 text-gray-600" />
-                      </div>
-                      <span className="text-xs font-medium">{t.label}</span>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
           </div>
         </>
       )}
