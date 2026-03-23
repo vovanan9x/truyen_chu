@@ -137,6 +137,7 @@ export default function AdminCrawlerPage() {
   const [expandedLogs, setExpandedLogs] = useState<string[]>([])
   const pollRef = useRef<ReturnType<typeof setInterval>|null>(null)
   const logsEndRef = useRef<HTMLDivElement>(null)
+  const batchStopRef = useRef(false) // signals batch for-loop to stop
 
   // --- Schedule tab ---
   const [schedules, setSchedules] = useState<CrawlSchedule[]>([])
@@ -1134,7 +1135,7 @@ export default function AdminCrawlerPage() {
                 </div>
                 <button onClick={async()=>{
                   setBatchRunning(true);setBatchDone(0);setBatchLogs([`🚀 Bắt đầu batch crawl ${batchStories.length} truyện | ${batchParallelStories} song song | ${batchChapterConcurrency} chương/truyện`])
-                  setBatchErrorCount(0);setBatchStoryStatus({})
+                  setBatchErrorCount(0);setBatchStoryStatus({});batchStopRef.current=false
 
                   // Helper: crawl 1 story and wait for completion
                   async function crawlOneStory(storyUrl: string, idx: number) {
@@ -1179,11 +1180,15 @@ export default function AdminCrawlerPage() {
                     setBatchDone(p=>p+1)
                   }
 
-                  // Run in parallel chunks
+                  // Run in parallel chunks — stop if batchStopRef is set
                   for(let i=0;i<batchStories.length;i+=batchParallelStories){
+                    if(batchStopRef.current){
+                      setBatchLogs(p=>[...p,`🛑 Dừng batch bởi người dùng — đã xử lý ${batchDone}/${batchStories.length} truyện`])
+                      break
+                    }
                     const chunk=batchStories.slice(i,i+batchParallelStories)
                     await Promise.allSettled(chunk.map((url,j)=>crawlOneStory(url,i+j)))
-                    if(i+batchParallelStories<batchStories.length)
+                    if(i+batchParallelStories<batchStories.length && !batchStopRef.current)
                       await new Promise(r=>setTimeout(r,batchDelaySec*1000))
                   }
 
@@ -1195,6 +1200,16 @@ export default function AdminCrawlerPage() {
                   {batchRunning?<Loader2 className="w-4 h-4 animate-spin"/>:<Globe className="w-4 h-4"/>}
                   {batchRunning?`Đang crawl ${batchDone}/${batchStories.length}...`:`Bắt đầu crawl ${batchStories.length} truyện`}
                 </button>
+                {batchRunning&&(
+                  <button
+                    onClick={()=>{
+                      batchStopRef.current=true
+                      setBatchLogs(p=>[...p,'⏳ Đang dừng sau truyện hiện tại...'])
+                    }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-sm font-semibold border border-red-200 transition-colors">
+                    <StopCircle className="w-4 h-4"/> 🛑 Dừng batch
+                  </button>
+                )}
               </div>
 
               {/* Progress bar */}
