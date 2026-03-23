@@ -13,6 +13,28 @@ const FETCH_HEADERS = {
   'Pragma': 'no-cache',
 }
 
+// ─── Proxy Agent (undici, built into Node.js 18+) ─────────────────────────────
+// Set CRAWL_PROXY_URL=http://user:pass@proxy-host:port to route all crawler
+// requests through a proxy (bypasses Cloudflare and other bot protections).
+
+let _proxyAgent: any = undefined
+let _proxyAgentInit = false
+
+async function getProxyAgent() {
+  if (_proxyAgentInit) return _proxyAgent
+  _proxyAgentInit = true
+  const proxyUrl = process.env.CRAWL_PROXY_URL
+  if (!proxyUrl) return null
+  try {
+    const { ProxyAgent } = await import('undici')
+    _proxyAgent = new ProxyAgent(proxyUrl)
+    console.log('[Crawler] 🔀 Proxy enabled:', proxyUrl.replace(/:([^:@]+)@/, ':***@'))
+  } catch (e) {
+    console.warn('[Crawler] ⚠️ Could not init proxy agent:', e)
+  }
+  return _proxyAgent
+}
+
 export interface StoryInfo {
   title: string
   author: string
@@ -43,14 +65,25 @@ export interface SiteAdapter {
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 
 export async function fetchUrl(url: string, timeout = 15000, cookies?: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: {
-      ...FETCH_HEADERS,
-      ...(cookies ? { 'Cookie': cookies } : {}),
-    },
-    signal: AbortSignal.timeout(timeout),
-    redirect: 'follow',
-  })
+  const headers = {
+    ...FETCH_HEADERS,
+    ...(cookies ? { 'Cookie': cookies } : {}),
+  }
+
+  const proxyAgent = await getProxyAgent()
+  if (proxyAgent) {
+    const { fetch: undiciFetch } = await import('undici')
+    const res = await (undiciFetch as any)(url, {
+      headers,
+      signal: AbortSignal.timeout(timeout),
+      redirect: 'follow',
+      dispatcher: proxyAgent,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
+    return res.text()
+  }
+
+  const res = await fetch(url, { headers, signal: AbortSignal.timeout(timeout), redirect: 'follow' })
   if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`)
   return res.text()
 }
@@ -330,14 +363,19 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
 
             const fullUrl = apiUrl.startsWith('http') ? apiUrl : origin + apiUrl
             try {
-              const res = await fetch(fullUrl, {
-                headers: {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              const _ajaxHeaders = {
+                  'User-Agent': FETCH_HEADERS['User-Agent'],
                   'Accept': 'application/json, text/html, */*',
                   'X-Requested-With': 'XMLHttpRequest',
                   'Referer': storyUrl,
                   ...(cookies ? { 'Cookie': cookies } : {}),
-                },
+                }
+              const _ajaxProxy = await getProxyAgent()
+              const _ajaxFetch = _ajaxProxy
+                ? async (u: string, opts: any) => { const { fetch: f } = await import('undici'); return (f as any)(u, { ...opts, dispatcher: _ajaxProxy }) }
+                : fetch
+              const res = await _ajaxFetch(fullUrl, {
+                headers: _ajaxHeaders,
                 signal: AbortSignal.timeout(10000),
               })
               if (!res.ok) break
