@@ -26,11 +26,11 @@ export default function HeaderAuth() {
 
   if (!session) {
     return (
-      <div className="hidden sm:flex items-center gap-2">
-        <Link href="/dang-nhap" className="px-4 py-2 text-sm font-medium text-foreground/80 hover:text-foreground hover:bg-muted rounded-lg transition-colors">
+      <div className="flex items-center gap-1.5 sm:gap-2">
+        <Link href="/dang-nhap" className="px-2.5 sm:px-4 py-2 text-xs sm:text-sm font-medium text-foreground/80 hover:text-foreground hover:bg-muted rounded-lg transition-colors whitespace-nowrap">
           Đăng nhập
         </Link>
-        <Link href="/dang-ky" className="px-4 py-2 text-sm font-medium text-white rounded-lg gradient-primary hover:opacity-90 transition-opacity shadow-sm">
+        <Link href="/dang-ky" className="px-2.5 sm:px-4 py-2 text-xs sm:text-sm font-medium text-white rounded-lg gradient-primary hover:opacity-90 transition-opacity shadow-sm whitespace-nowrap">
           Đăng ký
         </Link>
       </div>
