@@ -6,7 +6,7 @@ import {
   Globe, Search, Loader2, Check, AlertCircle, ChevronDown,
   Clock, CheckCircle2, XCircle, RefreshCw, Trash2, ExternalLink,
   BookOpen, Settings2, List, CalendarClock, Wrench, Play, ToggleLeft,
-  ToggleRight, PlusCircle, Save, Timer, Database, StopCircle
+  ToggleRight, PlusCircle, Save, Timer, Database, StopCircle, ShieldCheck, Wifi, WifiOff
 } from 'lucide-react'
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ function CrawlJobCard({ job, expanded, expandedLogs, onExpand, onDelete, onCance
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function AdminCrawlerPage() {
-  const [tab, setTab] = useState<'new'|'history'|'db-logs'|'schedule'|'sites'|'batch'>('new')
+  const [tab, setTab] = useState<'new'|'history'|'db-logs'|'schedule'|'sites'|'batch'|'proxy'>('new')
 
   // --- Crawl new tab ---
   const [url, setUrl] = useState('')
@@ -177,6 +177,18 @@ export default function AdminCrawlerPage() {
   const [dbLogsLoading, setDbLogsLoading] = useState(false)
   const [dbLogsPage, setDbLogsPage] = useState(1)
   const [dbLogsTotal, setDbLogsTotal] = useState(0)
+
+  // --- Proxy tab ---
+  const [proxyHost, setProxyHost] = useState('')
+  const [proxyPort, setProxyPort] = useState('10000')
+  const [proxyUser, setProxyUser] = useState('')
+  const [proxyPass, setProxyPass] = useState('')
+  const [usePlaywright, setUsePlaywright] = useState(false)
+  const [proxyLoading, setProxyLoading] = useState(false)
+  const [proxySaving, setProxySaving] = useState(false)
+  const [proxySaved, setProxySaved] = useState(false)
+  const [testingProxy, setTestingProxy] = useState(false)
+  const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; ip?: string; error?: string } | null>(null)
 
   const SUPPORTED = [
     { name: 'TruyenFull', icon: '🟩' },
@@ -268,7 +280,55 @@ export default function AdminCrawlerPage() {
     if (tab === 'schedule') fetchSchedules()
     if (tab === 'sites') fetchSiteConfigs()
     if (tab === 'db-logs') fetchDbLogs(1)
+    if (tab === 'proxy') fetchProxySettings()
   }, [tab])
+
+  async function fetchProxySettings() {
+    setProxyLoading(true)
+    try {
+      const res = await fetch('/api/admin/settings')
+      if (res.ok) {
+        const d = await res.json()
+        setProxyHost(d.crawl_proxy_host ?? '')
+        setProxyPort(d.crawl_proxy_port ?? '10000')
+        setProxyUser(d.crawl_proxy_user ?? '')
+        setProxyPass(d.crawl_proxy_pass ?? '')
+        setUsePlaywright(d.crawl_use_playwright === '1')
+      }
+    } finally { setProxyLoading(false) }
+  }
+
+  async function saveProxySettings() {
+    setProxySaving(true)
+    try {
+      await fetch('/api/admin/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          crawl_proxy_host: proxyHost,
+          crawl_proxy_port: proxyPort,
+          crawl_proxy_user: proxyUser,
+          crawl_proxy_pass: proxyPass,
+          crawl_use_playwright: usePlaywright ? '1' : '',
+        }),
+      })
+      setProxySaved(true)
+      setTimeout(() => setProxySaved(false), 3000)
+    } finally { setProxySaving(false) }
+  }
+
+  async function testProxy() {
+    setTestingProxy(true); setProxyTestResult(null)
+    try {
+      const res = await fetch('/api/admin/crawler/test-proxy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ host: proxyHost, port: proxyPort, user: proxyUser, pass: proxyPass }),
+      })
+      setProxyTestResult(await res.json())
+    } catch { setProxyTestResult({ ok: false, error: 'Lỗi kết nối' }) }
+    setTestingProxy(false)
+  }
 
   async function handlePreview() {
     if (!url.trim()) return
@@ -401,6 +461,7 @@ export default function AdminCrawlerPage() {
     { value: 'db-logs', label: `Lịch sử DB${dbLogsTotal > 0 ? ` (${dbLogsTotal})` : ''}`, icon: Database },
     { value: 'schedule', label: 'Lịch tự động', icon: CalendarClock },
     { value: 'sites', label: 'Cấu hình site', icon: Wrench },
+    { value: 'proxy', label: 'Proxy & Bypass', icon: ShieldCheck },
   ] as const
 
   return (
@@ -1177,6 +1238,91 @@ export default function AdminCrawlerPage() {
                 })}
               </div>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Tab: Proxy & Bypass ────────────────────────────────────────────────── */}
+      {tab === 'proxy' && (
+        <div className="space-y-5 max-w-2xl">
+          {proxyLoading ? (
+            <div className="flex items-center gap-2 py-10 text-muted-foreground"><Loader2 className="animate-spin w-5 h-5" /> Đang tải...</div>
+          ) : (
+            <>
+              <div className="p-5 rounded-2xl border border-border bg-card space-y-4">
+                <div>
+                  <h2 className="font-semibold flex items-center gap-2"><Wifi className="w-4 h-4 text-blue-500" /> Cấu hình Proxy</h2>
+                  <p className="text-xs text-muted-foreground mt-1">Route request crawler qua proxy IP để bypass block IP datacenter của VPS.</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className={labelCls}>Proxy Host</label>
+                    <input value={proxyHost} onChange={e => setProxyHost(e.target.value)}
+                      placeholder="proxy.webshare.io" className={inputCls + ' w-full font-mono'} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Port</label>
+                    <input value={proxyPort} onChange={e => setProxyPort(e.target.value)}
+                      placeholder="10000" className={inputCls + ' w-full font-mono'} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Username</label>
+                    <input value={proxyUser} onChange={e => setProxyUser(e.target.value)}
+                      placeholder="user" autoComplete="off" className={inputCls + ' w-full'} />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Password</label>
+                    <input type="password" value={proxyPass} onChange={e => setProxyPass(e.target.value)}
+                      placeholder="••••••••" autoComplete="new-password" className={inputCls + ' w-full'} />
+                  </div>
+                </div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <button onClick={testProxy} disabled={testingProxy || !proxyHost}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl border border-border hover:bg-muted text-sm font-medium transition-colors disabled:opacity-50">
+                    {testingProxy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wifi className="w-4 h-4" />}
+                    {testingProxy ? 'Đang test...' : 'Test kết nối'}
+                  </button>
+                  {proxyTestResult && (
+                    <div className={`flex items-center gap-2 text-sm px-3 py-1.5 rounded-lg ${
+                      proxyTestResult.ok ? 'bg-green-500/10 text-green-600' : 'bg-red-500/10 text-red-600'
+                    }`}>
+                      {proxyTestResult.ok
+                        ? <><Wifi className="w-4 h-4" /> IP qua proxy: <strong>{proxyTestResult.ip}</strong></>
+                        : <><WifiOff className="w-4 h-4" /> Lỗi: {proxyTestResult.error}</>}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-5 rounded-2xl border border-border bg-card space-y-4">
+                <div>
+                  <h2 className="font-semibold flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-purple-500" /> Auto Cloudflare Bypass (Playwright)</h2>
+                  <p className="text-xs text-muted-foreground mt-1">Tự động dùng Chromium headless để giải Cloudflare JS challenge khi gặp HTTP 403.</p>
+                </div>
+                <div className="flex items-center justify-between p-4 rounded-xl border border-border bg-background">
+                  <div>
+                    <p className="text-sm font-semibold">🎭 Bật Playwright bypass</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Khi gặp 403, tự động mở Chromium, giải challenge, lấy cookie <code className="bg-muted px-1 rounded">cf_clearance</code>, cache 23 tiếng.</p>
+                    <p className="text-xs text-amber-600 mt-1">⚠️ Cần cài trên VPS: <code className="bg-muted px-1 rounded text-xs">npx playwright install chromium && npx playwright install-deps chromium</code></p>
+                  </div>
+                  <button
+                    onClick={() => setUsePlaywright(v => !v)}
+                    className={`relative w-12 h-7 rounded-full transition-colors flex-shrink-0 ml-4 ${
+                      usePlaywright ? 'bg-primary' : 'bg-muted-foreground/30'
+                    }`}>
+                    <span className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                      usePlaywright ? 'translate-x-6' : 'translate-x-1'
+                    }`} />
+                  </button>
+                </div>
+              </div>
+
+              <button onClick={saveProxySettings} disabled={proxySaving}
+                className="flex items-center gap-2 px-6 py-2.5 rounded-xl gradient-primary text-white font-semibold hover:opacity-90 disabled:opacity-60 shadow-sm">
+                {proxySaving ? <Loader2 className="w-4 h-4 animate-spin" /> : proxySaved ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+                {proxySaving ? 'Đang lưu...' : proxySaved ? '✅ Đã lưu!' : 'Lưu cài đặt'}
+              </button>
+            </>
           )}
         </div>
       )}
