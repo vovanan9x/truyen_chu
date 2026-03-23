@@ -6,7 +6,7 @@ import { unstable_noStore as noStore } from 'next/cache'
 import { BookOpen, Eye, CheckCircle, Clock, AlertCircle, Lock } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
 import { getSiteSettings, isAdEnabled, getAdCode } from '@/lib/site-settings'
-import { formatNumber, formatDate } from '@/lib/utils'
+import { formatNumber, formatDate, slugify } from '@/lib/utils'
 import BookmarkButton from '@/components/story/BookmarkButton'
 import CommentSection from '@/components/story/CommentSection'
 import RatingStars from '@/components/story/RatingStars'
@@ -15,6 +15,7 @@ import ReadingListButton from '@/components/story/ReadingListButton'
 import ChapterListClient from '@/components/story/ChapterListClient'
 import ExpandableDescription from '@/components/story/ExpandableDescription'
 import AdBanner from '@/components/ads/AdBanner'
+import ViewTracker from '@/components/story/ViewTracker'
 
 export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
   const story = await prisma.story.findUnique({
@@ -89,11 +90,11 @@ export default async function StoryDetailPage({
   const status = STATUS_INFO[story.status]
   const StatusIcon = status.icon
 
-  // Update view count (fire-and-forget)
-  prisma.story.update({ where: { id: story.id }, data: { viewCount: { increment: 1 } } }).catch(() => {})
+  // View count handled client-side via ViewTracker (cookie-gated, 1hr debounce)
 
   return (
     <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-8">
+      <ViewTracker storyId={story.id} />
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 sm:gap-8">
         {/* Left column */}
         <div className="lg:col-span-3 space-y-5 sm:space-y-8">
@@ -117,7 +118,12 @@ export default async function StoryDetailPage({
               <div>
                 <h1 className="text-base sm:text-2xl md:text-3xl font-bold leading-tight line-clamp-3 sm:line-clamp-none">{story.title}</h1>
                 {story.author && (
-                  <p className="text-muted-foreground mt-0.5 text-xs sm:text-sm">Tác giả: <span className="font-medium text-foreground">{story.author}</span></p>
+                  <p className="text-muted-foreground mt-0.5 text-xs sm:text-sm">
+                    Tác giả:{' '}
+                    <Link href={`/tac-gia/${encodeURIComponent(slugify(story.author))}`} className="font-medium text-foreground hover:text-primary transition-colors">
+                      {story.author}
+                    </Link>
+                  </p>
                 )}
               </div>
 
