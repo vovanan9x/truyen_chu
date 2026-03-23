@@ -23,7 +23,8 @@ function createRedisClient() {
 
 export const redis = globalForRedis.redis ?? createRedisClient()
 
-if (process.env.NODE_ENV !== 'production') globalForRedis.redis = redis
+// Cache trong cả production để tránh tạo connection mới mỗi lần cold start
+globalForRedis.redis = redis
 
 // Helpers
 export async function cacheGet<T>(key: string): Promise<T | null> {

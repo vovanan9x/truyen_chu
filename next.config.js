@@ -1,8 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  compress: true,
+  poweredByHeader: false,
+
   experimental: {
     instrumentationHook: true,
+    optimizePackageImports: ['lucide-react', '@radix-ui/react-icons'],
   },
+
 
   // ─── Image whitelist (không dùng ** để tránh lạm dụng proxy) ─────────────
   images: {
