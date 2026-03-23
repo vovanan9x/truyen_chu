@@ -649,32 +649,3 @@ model ModRequest {
   @@index([createdAt])
   @@map("mod_requests")
 }
-
-// ─── Distributed Crawl Queue ───────────────────────────────────────────────────
-// Multiple VPS workers poll this table and claim items atomically via SKIP LOCKED
-
-model CrawlQueue {
-  id          String    @id @default(cuid())
-  url         String                          // Story URL to crawl
-  status      String    @default("pending")   // pending | running | done | failed
-  workerId    String?                         // Which VPS is handling this
-  priority    Int       @default(0)           // Higher = processed sooner
-  fromChapter Int       @default(1)
-  toChapter   Int       @default(9999)
-  concurrency Int       @default(5)           // Chapter concurrency
-  batchDelay  Int       @default(300)         // Delay between chapter batches (ms)
-  overwrite   Boolean   @default(false)
-  attempts    Int       @default(0)
-  maxAttempts Int       @default(3)
-  error       String?   @db.Text
-  storyId     String?                         // Filled after successful crawl
-  storyTitle  String?                         // Cached for display
-  createdAt   DateTime  @default(now())
-  startedAt   DateTime?
-  finishedAt  DateTime?
-  importedChapters Int  @default(0)
-
-  @@index([status, priority, createdAt])
-  @@index([url])
-  @@map("crawl_queue")
-}
