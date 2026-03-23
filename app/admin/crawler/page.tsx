@@ -114,7 +114,7 @@ function CrawlJobCard({ job, expanded, expandedLogs, onExpand, onDelete, onCance
 
 // ─── Main Page ─────────────────────────────────────────────────────────────────
 export default function AdminCrawlerPage() {
-  const [tab, setTab] = useState<'new'|'history'|'db-logs'|'schedule'|'sites'|'batch'|'proxy'>('new')
+  const [tab, setTab] = useState<'new'|'history'|'db-logs'|'schedule'|'sites'|'batch'|'proxy'|'queue'>('new')
 
   // --- Crawl new tab ---
   const [url, setUrl] = useState('')
@@ -187,6 +187,22 @@ export default function AdminCrawlerPage() {
   const [proxySaved, setProxySaved] = useState(false)
   const [testingProxy, setTestingProxy] = useState(false)
   const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; ip?: string; error?: string } | null>(null)
+
+  // --- Queue tab ---
+  interface QueueItem { id:string;url:string;status:string;workerId?:string;priority:number;importedChapters:number;storyTitle?:string;createdAt:string;startedAt?:string;finishedAt?:string;error?:string;attempts:number }
+  const [queueItems, setQueueItems] = useState<QueueItem[]>([])
+  const [queueTotal, setQueueTotal] = useState(0)
+  const [queueStats, setQueueStats] = useState<Record<string,number>>({})
+  const [queueLoading, setQueueLoading] = useState(false)
+  const [queueFilter, setQueueFilter] = useState('all')
+  const [queueUrls, setQueueUrls] = useState('')
+  const [queueFromCh, setQueueFromCh] = useState(1)
+  const [queueConcurrency, setQueueConcurrency] = useState(5)
+  const [queueDelay, setQueueDelay] = useState(300)
+  const [queueAdding, setQueueAdding] = useState(false)
+  const [queueAddResult, setQueueAddResult] = useState('')
+  const [workerStatus, setWorkerStatus] = useState<any>(null)
+  const [workerLoading, setWorkerLoading] = useState(false)
 
   const SUPPORTED = [
     { name: 'TruyenFull', icon: '🟩' },
@@ -279,6 +295,7 @@ export default function AdminCrawlerPage() {
     if (tab === 'sites') fetchSiteConfigs()
     if (tab === 'db-logs') fetchDbLogs(1)
     if (tab === 'proxy') fetchProxySettings()
+    if (tab === 'queue') { fetchQueue(); fetchWorkerStatus() }
   }, [tab])
 
   async function fetchProxySettings() {
@@ -463,9 +480,59 @@ export default function AdminCrawlerPage() {
     setSiteConfigs(prev => prev.filter(c => c.id !== id))
   }
 
+  // --- Queue functions ---
+  async function fetchQueue(filter = queueFilter) {
+    setQueueLoading(true)
+    try {
+      const res = await fetch(`/api/admin/crawl/queue?status=${filter}&limit=100`)
+      if (res.ok) {
+        const d = await res.json()
+        setQueueItems(d.items)
+        setQueueTotal(d.total)
+        setQueueStats(d.stats ?? {})
+      }
+    } finally { setQueueLoading(false) }
+  }
+
+  async function fetchWorkerStatus() {
+    const res = await fetch('/api/admin/crawl/queue/worker')
+    if (res.ok) setWorkerStatus(await res.json())
+  }
+
+  async function addToQueue() {
+    const urls = queueUrls.split('\n').map(u => u.trim()).filter(u => u.startsWith('http'))
+    if (!urls.length) { setQueueAddResult('Không có URL hợp lệ'); return }
+    setQueueAdding(true)
+    setQueueAddResult('')
+    try {
+      const res = await fetch('/api/admin/crawl/queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls, fromChapter: queueFromCh, concurrency: queueConcurrency, batchDelay: queueDelay }),
+      })
+      const d = await res.json()
+      setQueueAddResult(`✅ Đã thêm ${d.added} URL | Bỏ qua ${d.skipped} (đã tồn tại)`)
+      setQueueUrls('')
+      fetchQueue()
+    } catch (e: any) { setQueueAddResult(`❌ ${e.message}`) }
+    setQueueAdding(false)
+  }
+
+  async function workerAction(action: 'start' | 'stop') {
+    setWorkerLoading(true)
+    try {
+      await fetch('/api/admin/crawl/queue/worker', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      await fetchWorkerStatus()
+    } finally { setWorkerLoading(false) }
+  }
+
   const TABS = [
     { value: 'new', label: 'Crawl mới', icon: Globe },
     { value: 'batch', label: 'Batch crawl', icon: List },
+    { value: 'queue', label: `Queue${queueStats.pending > 0 ? ` (${queueStats.pending})` : ''}`, icon: Database },
     { value: 'history', label: `Lịch sử (${jobs.length})`, icon: List },
     { value: 'db-logs', label: `Lịch sử DB${dbLogsTotal > 0 ? ` (${dbLogsTotal})` : ''}`, icon: Database },
     { value: 'schedule', label: 'Lịch tự động', icon: CalendarClock },
@@ -1266,6 +1333,156 @@ export default function AdminCrawlerPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Tab: Queue (Distributed) ─────────────────────────────────────────────── */}
+      {tab === 'queue' && (
+        <div className="space-y-5">
+          {/* Stats row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {(['pending','running','done','failed'] as const).map(s => {
+              const colors: Record<string,string> = {pending:'bg-yellow-500/10 text-yellow-600',running:'bg-blue-500/10 text-blue-600',done:'bg-green-500/10 text-green-600',failed:'bg-red-500/10 text-red-600'}
+              return (
+                <div key={s} onClick={() => { setQueueFilter(s); fetchQueue(s) }}
+                  className={`p-4 rounded-2xl border cursor-pointer transition-all ${queueFilter===s?'border-primary ring-1 ring-primary/30':'border-border hover:border-primary/40'} ${colors[s]}/30`}>
+                  <p className="text-2xl font-bold">{queueStats[s] ?? 0}</p>
+                  <p className="text-xs font-medium capitalize">{s}</p>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Worker controls */}
+          <div className="p-4 rounded-2xl border border-border bg-card space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <p className="font-semibold text-sm">Worker — VPS này</p>
+                {workerStatus && (
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    ID: <code className="font-mono">{workerStatus.workerId}</code> ·
+                    Đã xử lý: <strong>{workerStatus.processedCount}</strong> truyện
+                    {workerStatus.currentUrl && <> · Đang crawl: <span className="text-primary truncate max-w-[200px] inline-block">{workerStatus.currentUrl?.split('/').pop()}</span></>}
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={fetchWorkerStatus} className="p-2 rounded-lg hover:bg-muted"><RefreshCw className="w-4 h-4"/></button>
+                {workerStatus?.running ? (
+                  <button onClick={() => workerAction('stop')} disabled={workerLoading}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 text-sm font-semibold border border-red-200 disabled:opacity-50">
+                    <StopCircle className="w-4 h-4"/> Dừng worker
+                  </button>
+                ) : (
+                  <button onClick={() => workerAction('start')} disabled={workerLoading}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+                    {workerLoading ? <Loader2 className="w-4 h-4 animate-spin"/> : <Play className="w-4 h-4"/>}
+                    Bắt đầu worker
+                  </button>
+                )}
+              </div>
+            </div>
+            {workerStatus?.running && (
+              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-blue-500/10 text-blue-600 text-xs">
+                <Loader2 className="w-3.5 h-3.5 animate-spin"/>
+                Worker đang chạy — tự động lấy item tiếp theo từ queue mỗi 5 giây
+              </div>
+            )}
+          </div>
+
+          {/* Add URLs */}
+          <div className="p-5 rounded-2xl border border-border bg-card space-y-4">
+            <p className="font-semibold text-sm">Thêm URL vào Queue</p>
+            <div>
+              <label className={labelCls}>Danh sách URL truyện (1 URL/dòng)</label>
+              <textarea
+                value={queueUrls}
+                onChange={e => setQueueUrls(e.target.value)}
+                rows={5} placeholder={"https://metruyenchu.com.vn/truyen-a\nhttps://metruyenchu.com.vn/truyen-b"}
+                className={`${inputCls} w-full font-mono text-xs resize-y`}
+              />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div><label className={labelCls}>Từ chương</label>
+                <input type="number" value={queueFromCh} onChange={e => setQueueFromCh(+e.target.value)} min={1} className={inputCls+' w-full'}/></div>
+              <div><label className={labelCls}>Chương song song</label>
+                <select value={queueConcurrency} onChange={e => setQueueConcurrency(+e.target.value)} className={inputCls+' w-full'}>
+                  <option value={3}>3</option><option value={5}>5</option><option value={8}>8</option><option value={10}>10</option><option value={15}>15</option>
+                </select></div>
+              <div><label className={labelCls}>Delay (ms)</label>
+                <select value={queueDelay} onChange={e => setQueueDelay(+e.target.value)} className={inputCls+' w-full'}>
+                  <option value={100}>100ms</option><option value={300}>300ms</option><option value={500}>500ms</option>
+                </select></div>
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={addToQueue} disabled={queueAdding || !queueUrls.trim()}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl gradient-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+                {queueAdding ? <Loader2 className="w-4 h-4 animate-spin"/> : <PlusCircle className="w-4 h-4"/>}
+                Thêm vào Queue
+              </button>
+              {queueAddResult && <p className="text-sm">{queueAddResult}</p>}
+            </div>
+          </div>
+
+          {/* Queue list */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="flex gap-2">
+                {(['all','pending','running','done','failed'] as const).map(f => (
+                  <button key={f} onClick={() => { setQueueFilter(f); fetchQueue(f) }}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium ${queueFilter===f?'bg-primary text-primary-foreground':'bg-muted hover:bg-muted/80'}`}>
+                    {f}
+                  </button>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => fetchQueue()} className="p-2 rounded-lg hover:bg-muted"><RefreshCw className="w-4 h-4"/></button>
+                <button onClick={async () => {
+                  if (!confirm('Xóa tất cả done + failed?')) return
+                  await fetch('/api/admin/crawl/queue', { method: 'DELETE' })
+                  fetchQueue()
+                }} className="px-3 py-1.5 rounded-lg text-xs bg-red-50 hover:bg-red-100 text-red-600 border border-red-200">Dọn dẹp</button>
+              </div>
+            </div>
+
+            {queueLoading ? (
+              <div className="flex justify-center py-10"><Loader2 className="w-7 h-7 animate-spin text-muted-foreground"/></div>
+            ) : queueItems.length === 0 ? (
+              <div className="py-16 text-center text-muted-foreground">
+                <Database className="w-12 h-12 mx-auto mb-3 opacity-30"/>
+                <p>Queue trống — thêm URL truyện bên trên</p>
+                <p className="text-xs mt-1">Worker sẽ tự động xử lý khi có item mới</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {queueItems.map(item => {
+                  const sc: Record<string,string> = {pending:'bg-yellow-100 text-yellow-700',running:'bg-blue-100 text-blue-700',done:'bg-green-100 text-green-700',failed:'bg-red-100 text-red-700'}
+                  return (
+                    <div key={item.id} className="p-3 rounded-xl border border-border bg-card flex items-start gap-3 flex-wrap">
+                      <span className={`flex-shrink-0 px-2 py-0.5 rounded-full text-xs font-medium ${sc[item.status]}`}>{item.status}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm truncate">{item.storyTitle ?? item.url.split('/').pop()}</p>
+                        <p className="text-xs text-muted-foreground truncate">{item.url}</p>
+                        {item.workerId && <p className="text-xs text-muted-foreground">Worker: <code>{item.workerId}</code></p>}
+                        {item.error && <p className="text-xs text-destructive mt-1 truncate">{item.error}</p>}
+                        <div className="flex gap-3 mt-1 text-xs text-muted-foreground flex-wrap">
+                          {item.importedChapters > 0 && <span className="text-green-600 font-medium">+{item.importedChapters} ch.</span>}
+                          <span>{new Date(item.createdAt).toLocaleString('vi-VN')}</span>
+                          {item.attempts > 1 && <span>{item.attempts} lần thử</span>}
+                        </div>
+                      </div>
+                      <button onClick={async () => {
+                        await fetch(`/api/admin/crawl/queue/${item.id}`, { method: 'DELETE' })
+                        fetchQueue()
+                      }} className="p-1.5 rounded-lg hover:bg-red-50 text-destructive flex-shrink-0">
+                        <Trash2 className="w-3.5 h-3.5"/>
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
