@@ -62,6 +62,17 @@ server {
         access_log off;
     }
 
+    # ── Uploads (ảnh bìa crawl về) — serve trực tiếp, KHÔNG qua Next.js ───────
+    # Đổi path bên dưới thành đường dẫn thực tế trên VPS
+    location /uploads/ {
+        alias /var/www/truyen_chu/public/uploads/;
+        expires 30d;
+        add_header Cache-Control "public, max-age=2592000";
+        access_log off;
+        # Trả 404 nếu file không tồn tại (thay vì fallback về Next.js)
+        try_files $uri =404;
+    }
+
     # ── Next.js Image Optimization ───────────────────────────────────────────
     location /_next/image {
         proxy_pass http://nextjs;
