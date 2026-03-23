@@ -6,9 +6,10 @@ import FeaturedCarousel from '@/components/story/FeaturedCarousel'
 import StoryGrid from '@/components/story/StoryGrid'
 import { StoryCardData } from '@/components/story/StoryCard'
 import { buildHomeMeta } from '@/lib/seo'
+import { unstable_noStore as noStore } from 'next/cache'
 
-// Tự động revalidate mỗi 30s → truyện/chương mới hiện trong vòng 30s
-export const revalidate = 30
+// Luôn fetch dữ liệu mới nhất — không cache trang chủ (cần thấy truyện/chương mới ngay sau khi crawl)
+export const dynamic = 'force-dynamic'
 
 export async function generateMetadata() {
   const meta = await buildHomeMeta()
@@ -84,6 +85,7 @@ function mapStory(s: Awaited<ReturnType<typeof getRecentlyUpdated>>[number]): St
 }
 
 export default async function HomePage() {
+  noStore()
   const [featured, recent, popular, genres] = await Promise.all([
     getFeaturedStories(),
     getRecentlyUpdated(),
