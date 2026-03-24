@@ -176,6 +176,11 @@ export default function AdminCrawlerPage() {
   const [savedFailedUrls, setSavedFailedUrls] = useState<string[]>([])
   const FAILED_KEY = 'batch_crawl_failed_urls'
 
+  // Truyện thiếu chương sau batch crawl — persist qua refresh
+  type IncompleteStory = { storyUrl: string; storyTitle: string; storyId: string; missingChapters: number[]; totalExpected: number; totalSaved: number }
+  const [incompleteStories, setIncompleteStories] = useState<IncompleteStory[]>([])
+  const INCOMPLETE_KEY = 'batch_crawl_incomplete_stories'
+
   // --- DB Logs tab ---
   const [dbLogs, setDbLogs] = useState<CrawlLog[]>([])
   const [dbLogsLoading, setDbLogsLoading] = useState(false)
@@ -228,6 +233,10 @@ export default function AdminCrawlerPage() {
       if (data.status === 'completed' || data.status === 'failed') {
         clearInterval(pollRef.current!)
         fetchHistory()
+        // Hook: lưu truyện thiếu chương vào localStorage
+        if ((data as any).incompleteInfo) {
+          addIncompleteStory((data as any).incompleteInfo)
+        }
       }
     }, 2000)
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
@@ -240,6 +249,10 @@ export default function AdminCrawlerPage() {
     try {
       const raw = localStorage.getItem('batch_crawl_failed_urls')
       if (raw) setSavedFailedUrls(JSON.parse(raw))
+    } catch {}
+    try {
+      const raw2 = localStorage.getItem('batch_crawl_incomplete_stories')
+      if (raw2) setIncompleteStories(JSON.parse(raw2))
     } catch {}
   }, [])
 
@@ -261,6 +274,26 @@ export default function AdminCrawlerPage() {
   function clearFailedQueue() {
     setSavedFailedUrls([])
     try { localStorage.removeItem('batch_crawl_failed_urls') } catch {}
+  }
+
+  function addIncompleteStory(info: IncompleteStory) {
+    setIncompleteStories(prev => {
+      const next = prev.filter(s => s.storyUrl !== info.storyUrl)
+      next.push(info)
+      try { localStorage.setItem(INCOMPLETE_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+  function removeIncompleteStory(storyUrl: string) {
+    setIncompleteStories(prev => {
+      const next = prev.filter(s => s.storyUrl !== storyUrl)
+      try { localStorage.setItem(INCOMPLETE_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+  function clearIncompleteStories() {
+    setIncompleteStories([])
+    try { localStorage.removeItem(INCOMPLETE_KEY) } catch {}
   }
 
   const fetchHistory = async () => {
@@ -694,6 +727,59 @@ export default function AdminCrawlerPage() {
               <Timer className="w-4 h-4 inline mr-1"/>Bật auto-crawl mỗi {schedInterval} phút
             </button>
           )}
+        </div>
+      )}
+
+      {/* ═══ Panel: Truyện thiếu chương — hiện khi có, không phụ thuộc tab ═══════ */}
+      {incompleteStories.length > 0 && (
+        <div className="p-5 rounded-2xl border border-amber-400/40 bg-amber-50/50 dark:bg-amber-500/5 space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h3 className="font-bold text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                ⚠️ Truyện thiếu chương ({incompleteStories.length} truyện)
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Các truyện dưới đây đã crawl nhưng có chương bị lỗi — bấm &quot;Crawl lại&quot; để bổ sung</p>
+            </div>
+            <button onClick={clearIncompleteStories} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive px-3 py-1.5 rounded-lg hover:bg-red-50 transition-colors">
+              <Trash2 className="w-3.5 h-3.5" /> Xóa tất cả
+            </button>
+          </div>
+          <div className="space-y-2">
+            {incompleteStories.map(story => (
+              <div key={story.storyUrl} className="p-4 rounded-xl border border-amber-200 bg-white dark:bg-card flex items-center gap-4 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold truncate">{story.storyTitle}</p>
+                  <p className="text-xs text-muted-foreground truncate mt-0.5">{story.storyUrl}</p>
+                  <div className="flex items-center gap-3 mt-1.5 text-xs flex-wrap">
+                    <span className="text-amber-600 font-medium">⚠️ Thiếu {story.missingChapters.length} chương / {story.totalExpected}</span>
+                    <span className="text-muted-foreground">Đã lưu: {story.totalSaved}</span>
+                    <span className="text-xs text-muted-foreground">Ch.[{story.missingChapters.slice(0, 8).join(', ')}{story.missingChapters.length > 8 ? `...+${story.missingChapters.length - 8}` : ''}]</span>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  {story.storyId && (
+                    <Link href={`/admin/truyen/${story.storyId}`} className="p-2 rounded-lg hover:bg-muted" title="Xem truyện">
+                      <ExternalLink className="w-4 h-4" />
+                    </Link>
+                  )}
+                  <button
+                    onClick={() => {
+                      // Chuyển sang tab Crawl mới và điền URL — admin crawl lại truyện này
+                      setUrl(story.storyUrl)
+                      setTab('new')
+                      removeIncompleteStory(story.storyUrl)
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg gradient-primary text-white text-xs font-medium hover:opacity-90"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" /> Crawl lại
+                  </button>
+                  <button onClick={() => removeIncompleteStory(story.storyUrl)} className="p-2 rounded-lg hover:bg-red-50 text-destructive">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

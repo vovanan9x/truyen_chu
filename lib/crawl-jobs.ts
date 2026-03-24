@@ -22,6 +22,14 @@ export interface CrawlJob {
   createdAt: Date
   updatedAt: Date
   error?: string
+  incompleteInfo?: {
+    storyUrl: string
+    storyTitle: string
+    storyId: string
+    missingChapters: number[]
+    totalExpected: number
+    totalSaved: number
+  } | null
 }
 
 // Global singleton map

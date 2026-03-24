@@ -486,7 +486,16 @@ async function runCrawlJob(
     summary.forEach(s => addLog(jobId, s))
     updateJob(jobId, {
       status: failed.length > 0 && imported === 0 ? 'failed' : 'completed',
-      failedChapters: failed, skippedChapters: skipped, importedChapters: imported + skipped.length
+      failedChapters: failed, skippedChapters: skipped, importedChapters: imported + skipped.length,
+      // Thông tin truyện thiếu chương — UI dùng để hiện panel retry
+      incompleteInfo: failed.length > 0 ? {
+        storyUrl: url,
+        storyTitle: info.title,
+        storyId: story.id,
+        missingChapters: failed,
+        totalExpected: totalInRange,
+        totalSaved: imported + skipped.length,
+      } : null,
     })
 
   } catch (e: any) {
