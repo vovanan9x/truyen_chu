@@ -1308,7 +1308,7 @@ export default function AdminCrawlerPage() {
                       if(!res.ok){throw new Error(`HTTP ${res.status}`)}
                       const {jobId}=await res.json()
                       let done=false,attempts=0
-                      while(!done&&attempts<600){
+                      while(!done&&attempts<4800){
                         await new Promise(r=>setTimeout(r,3000))
                         let st: Response
                         try{st=await fetch(`/api/admin/crawl/status/${jobId}`)}catch{attempts++;continue}
@@ -1329,7 +1329,7 @@ export default function AdminCrawlerPage() {
                         }
                         attempts++
                       }
-                      if(!done){ setBatchLogs(p=>[...p,`  ⏳ ${slug}: timeout 30 phút`]); addToFailedQueue(storyUrl) }
+                      if(!done){ setBatchLogs(p=>[...p,`  ⏳ ${slug}: timeout 4 giờ`]); addToFailedQueue(storyUrl) }
                       setBatchStoryStatus(p=>({...p,[idx]:'done'}))
                     }catch(e:any){
                       setBatchLogs(p=>[...p,`  ❌ ${slug}: ${e.message}`])
@@ -1403,7 +1403,7 @@ export default function AdminCrawlerPage() {
                         if (!res.ok) throw new Error(`HTTP ${res.status}`)
                         const { jobId } = await res.json()
                         let done = false, attempts = 0
-                        while (!done && attempts < 600) {
+                        while (!done && attempts < 4800) {
                           await new Promise(r => setTimeout(r, 3000))
                           let st: Response
                           try { st = await fetch(`/api/admin/crawl/status/${jobId}`) } catch { attempts++; continue }
