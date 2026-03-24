@@ -4,8 +4,8 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined
 }
 
-// Connection pool: giới hạn 20 connections, timeout 10s
-// Tránh PostgreSQL bị "too many clients" khi 5000+ CCU
+// Connection pool: giới hạn 30 connections, timeout 15s
+// Đủ cho 8 truyện × 3 chapters song song (24 connections) + headroom cho API khác
 function buildDatasourceUrl() {
   const base = process.env.DATABASE_URL ?? ''
   if (!base) return base

@@ -21,7 +21,7 @@ module.exports = {
 
       // ── Memory / Auto-restart ────────────────────────────────────────────────
       // Restart nếu RAM vượt 512MB (tuỳ VPS của bạn)
-      max_memory_restart: '512M',
+      max_memory_restart: '1024M',
 
       // ── Logs ────────────────────────────────────────────────────────────────
       out_file: './logs/pm2-out.log',
