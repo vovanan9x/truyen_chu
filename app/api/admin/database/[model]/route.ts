@@ -7,6 +7,7 @@ const ALLOWED_MODELS: Record<string, {
   label: string
   listFields: string[]
   editFields: string[]
+  createFields: string[]
   searchField?: string
   orderBy?: any
 }> = {
@@ -14,6 +15,7 @@ const ALLOWED_MODELS: Record<string, {
     label: 'Người dùng',
     listFields: ['id', 'name', 'email', 'role', 'coinBalance', 'level', 'isBanned', 'createdAt'],
     editFields: ['name', 'email', 'role', 'coinBalance', 'level', 'xp', 'bio'],
+    createFields: ['name', 'email', 'role'],
     searchField: 'email',
     orderBy: { createdAt: 'desc' },
   },
@@ -21,6 +23,7 @@ const ALLOWED_MODELS: Record<string, {
     label: 'Truyện',
     listFields: ['id', 'title', 'slug', 'author', 'status', 'viewCount', 'isFeatured', 'updatedAt'],
     editFields: ['title', 'slug', 'author', 'status', 'description', 'isFeatured', 'isPublished'],
+    createFields: ['title', 'slug', 'author', 'status'],
     searchField: 'title',
     orderBy: { updatedAt: 'desc' },
   },
@@ -28,18 +31,21 @@ const ALLOWED_MODELS: Record<string, {
     label: 'Chương',
     listFields: ['id', 'chapterNum', 'title', 'isLocked', 'price', 'viewCount', 'storyId', 'createdAt'],
     editFields: ['chapterNum', 'title', 'isLocked', 'price', 'isPublished'],
+    createFields: ['storyId', 'chapterNum', 'title'],
     orderBy: { createdAt: 'desc' },
   },
   comment: {
     label: 'Bình luận',
     listFields: ['id', 'content', 'likeCount', 'isPinned', 'userId', 'storyId', 'createdAt'],
     editFields: ['content', 'isPinned'],
+    createFields: [],
     orderBy: { createdAt: 'desc' },
   },
   genre: {
     label: 'Thể loại',
     listFields: ['id', 'name', 'slug', 'description'],
     editFields: ['name', 'slug', 'description'],
+    createFields: ['name', 'slug', 'description'],
     searchField: 'name',
     orderBy: { name: 'asc' },
   },
@@ -47,6 +53,7 @@ const ALLOWED_MODELS: Record<string, {
     label: 'Từ cấm',
     listFields: ['id', 'word', 'isActive', 'hitCount', 'createdAt'],
     editFields: ['word', 'isActive'],
+    createFields: ['word'],
     searchField: 'word',
     orderBy: { hitCount: 'desc' },
   },
@@ -54,24 +61,28 @@ const ALLOWED_MODELS: Record<string, {
     label: 'Lịch crawl',
     listFields: ['id', 'name', 'url', 'isActive', 'cronExpression', 'lastRunAt'],
     editFields: ['name', 'url', 'isActive', 'cronExpression'],
+    createFields: ['name', 'url', 'cronExpression'],
     orderBy: { createdAt: 'desc' },
   },
   notification: {
     label: 'Thông báo',
     listFields: ['id', 'message', 'type', 'isRead', 'userId', 'createdAt'],
     editFields: ['isRead'],
+    createFields: [],
     orderBy: { createdAt: 'desc' },
   },
   transaction: {
     label: 'Giao dịch',
     listFields: ['id', 'type', 'amount', 'description', 'userId', 'createdAt'],
     editFields: [],
+    createFields: [],
     orderBy: { createdAt: 'desc' },
   },
   errorLog: {
     label: 'Lỗi hệ thống',
     listFields: ['id', 'level', 'message', 'path', 'resolved', 'createdAt'],
     editFields: ['resolved'],
+    createFields: [],
     orderBy: { createdAt: 'desc' },
   },
 }
@@ -103,7 +114,53 @@ export async function GET(req: NextRequest, { params }: { params: { model: strin
     model.count({ where }),
   ])
 
-  return NextResponse.json({ rows, total, fields: config.listFields, editFields: config.editFields, label: config.label })
+  return NextResponse.json({ rows, total, fields: config.listFields, editFields: config.editFields, createFields: config.createFields, label: config.label })
+}
+
+// POST /api/admin/database/[model] — create row
+export async function POST(req: NextRequest, { params }: { params: { model: string } }) {
+  const session = await auth()
+  if (!session || session.user.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const modelName = params.model
+  const config = ALLOWED_MODELS[modelName]
+  if (!config) return NextResponse.json({ error: 'Model không hợp lệ' }, { status: 400 })
+  if (!config.createFields.length) return NextResponse.json({ error: 'Model này không hỗ trợ tạo mới' }, { status: 400 })
+
+  const { data } = await req.json()
+  const safeData: any = {}
+  for (const key of config.createFields) {
+    if (data[key] !== undefined && data[key] !== '') {
+      const val = data[key]
+      safeData[key] = typeof val === 'string' && !isNaN(Number(val)) && val.trim() !== '' ? Number(val) : val
+    }
+  }
+
+  try {
+    const created = await getModel(modelName).create({ data: safeData })
+    return NextResponse.json({ row: created })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? 'Lỗi tạo record' }, { status: 500 })
+  }
+}
+
+// PUT /api/admin/database/[model] — truncate table
+export async function PUT(req: NextRequest, { params }: { params: { model: string } }) {
+  const session = await auth()
+  if (!session || session.user.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  const modelName = params.model
+  if (!ALLOWED_MODELS[modelName]) return NextResponse.json({ error: 'Model không hợp lệ' }, { status: 400 })
+
+  const { action } = await req.json()
+  if (action !== 'truncate') return NextResponse.json({ error: 'action không hợp lệ' }, { status: 400 })
+
+  try {
+    const result = await getModel(modelName).deleteMany({})
+    return NextResponse.json({ ok: true, deleted: result.count })
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? 'Lỗi truncate' }, { status: 500 })
+  }
 }
 
 // PATCH /api/admin/database/[model] - update record
