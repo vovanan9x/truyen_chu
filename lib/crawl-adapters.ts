@@ -467,7 +467,8 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
 
         if (storyId) {
           const jsonField = cfg.chapterApiJson || 'data'
-          const chapters: ChapterRef[] = []
+          // Collect raw chapter links in source order — no number extraction
+          const rawChaps: { title: string; chUrl: string }[] = []
           let page = 1
           while (page <= 200) {
             const apiUrl = (apiUrlTemplate.includes('{storyId}')
@@ -502,58 +503,31 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
               } catch { /* raw HTML */ }
               if (!htmlContent || htmlContent.trim().length < 10) break
 
-
-              const prevCount = chapters.length
-              // Parse all chapter links — support both numbered and slug-only URLs
+              const prevCount = rawChaps.length
               const $$ = cheerio.load(htmlContent)
-              $$('a[href]').each((idx, el) => {
+              $$('a[href]').each((_, el) => {
                 const href = $$(el).attr('href') ?? ''
                 if (!href.includes('chuong') && !href.includes('chapter') && !href.includes('chap')) return
                 if (href === '#' || href.startsWith('javascript')) return
-                // Only accept URLs that belong to this story (prevents sidebar/related story contamination)
                 if (storySlug && !href.includes(storySlug)) return
                 const text = $$(el).attr('title') || $$(el).text().trim()
                 const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : ''
                 if (!chUrl) return
-                if (chapters.find(c => c.url === chUrl)) return
-
-                // Highest priority: title prefix "1: Title" or "Chương 1:" — user-visible number
-                let num: number | undefined
-                const titlePrefix = text.match(/^(\d+)\s*[：:]/)
-                if (titlePrefix) { num = parseInt(titlePrefix[1]) }
-
-                // Try number from URL: /chuong-5-slug
-                if (!num) {
-                  const urlNum = href.match(/(?:chuong|chapter|chap)[_-](\d+)/i)
-                  if (urlNum) num = parseInt(urlNum[1])
-                }
-
-                // Try number from text: "Đề 5", "Chương 5", "Hồi 5"
-                if (!num) {
-                  const t = text.trim()
-                  const tm = t.match(/(?:Đệ|Đề|Đe|Hồi|Tiết|Quyển)\s*(\d+)/i)
-                    || t.match(/(?:ch[uư][oô]ng|chapter|chap|t[aậ]p)\s*[._-]?\s*(\d+)/i)
-                    || t.match(/^[#№]?(\d+)$/)
-                  if (tm) num = parseInt(tm[1])
-                }
-
-                // Skip if chapter number cannot be determined (avoids phantom chapters)
-                if (!num || num <= 0 || num >= 100000) return
-
-                chapters.push({ num, title: text || `Chương ${num}`, url: chUrl })
+                if (rawChaps.find(c => c.chUrl === chUrl)) return // dedup by URL
+                rawChaps.push({ title: text || chUrl, chUrl })
               })
 
-              if (page === 1 && chapters.length === 0) {
+              if (page === 1 && rawChaps.length === 0) {
                 console.log(`[fetchAllChapters] page1 no chapters (raw ${rawText.length}b): ${rawText.slice(0,300)}`)
               }
-              if (chapters.length === prevCount && page > 1) break
+              if (rawChaps.length === prevCount && page > 1) break
               page++
               await new Promise(r => setTimeout(r, 300))
             } catch { break }
           }
-          if (chapters.length > 0) {
-            chapters.sort((a, b) => a.num - b.num)
-            return chapters
+          if (rawChaps.length > 0) {
+            // Assign sequential chapter numbers based on position in source list
+            return rawChaps.map((c, i) => ({ num: i + 1, title: c.title, url: c.chUrl }))
           }
         }
       }
@@ -563,80 +537,65 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
         let pageUrl: string | undefined = storyUrl
         let pageCount = 0
         const MAX_HTML_PAGES = 100
-        const htmlChapters: ChapterRef[] = []
+        const rawChaps: { title: string; chUrl: string }[] = []
 
         while (pageUrl && pageCount < MAX_HTML_PAGES) {
           const pageHtml = pageUrl === storyUrl ? html : await fetch$(pageUrl, 15000)
-          const { chapters: pageChaps, nextPageUrl } = this.fetchChapterList(pageUrl, pageHtml)
+          const $ = cheerio.load(pageHtml)
+          const origin2: string = new URL(pageUrl).origin
 
-          for (const ch of pageChaps) {
-            if (!htmlChapters.find(c => c.num === ch.num)) htmlChapters.push(ch)
+          const sel = cfg.chapterListSel || 'a[href*="chuong"], a[href*="chapter"], a[href*="chap"], a[href*="tap"]'
+          $(sel).each((_, el) => {
+            const $a = $(el).is('a') ? $(el) : $(el).find('a').first()
+            if (!$a.length) return
+            const href = $a.attr('href') ?? ''
+            if (!href || href.startsWith('#') || href.startsWith('javascript')) return
+            const text = $a.attr('title') || $a.text().trim()
+            const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin2 + href : new URL(href, pageUrl!).toString()
+            if (rawChaps.find(c => c.chUrl === chUrl)) return // dedup
+            rawChaps.push({ title: text || chUrl, chUrl })
+          })
+
+          // Next page
+          const nextEl = cfg.nextPageSel
+            ? $(cfg.nextPageSel).first()
+            : $('a[rel="next"], .pagination .next a, li.next a, a:contains("›"):last, a:contains("»"):last').first()
+          const nextHref = nextEl.attr('href')
+          let nextPageUrl: string | undefined
+          if (nextHref && !nextHref.includes('javascript') && nextHref !== '#') {
+            const resolved: string = nextHref.startsWith('http') ? nextHref : origin2 + nextHref
+            if (resolved !== pageUrl && resolved.startsWith(origin2)) nextPageUrl = resolved
           }
 
-          if (pageChaps.length === 0 || !nextPageUrl) break
-          if (nextPageUrl === pageUrl) break
-
+          if (!nextPageUrl) break
           pageUrl = nextPageUrl
           pageCount++
           await new Promise(r => setTimeout(r, 400))
         }
 
-        if (htmlChapters.length > 0) {
-          htmlChapters.sort((a, b) => a.num - b.num)
-          return htmlChapters
+        if (rawChaps.length > 0) {
+          return rawChaps.map((c, i) => ({ num: i + 1, title: c.title, url: c.chUrl }))
         }
       }
 
-      // Pattern 3: Last resort — use chapterListSel if configured, else broad link scan
-      const $ = cheerio.load(html)
-      const allChapters: ChapterRef[] = []
-
-      // Helper: extract chapter number from text or URL
-      function guessNum(text: string, href: string): number | null {
-        // 1. URL explicit number
-        const urlNum = href.match(/(?:chuong|chapter|chap|tap|ep|phan)[_-](\d+)/i)
-        if (urlNum) return parseInt(urlNum[1])
-
-        // 2. Scan all numbers in title
-        const t = text.normalize('NFC').replace(/\s+/g, ' ').trim()
-        const allNums = Array.from(t.matchAll(/(\d+)/g))
-        if (allNums.length === 0) return null
-        if (allNums.length === 1) return parseInt(allNums[0][1])
-
-        // 3. Multiple numbers — prefer number adjacent to chapter keyword
-        const kwPattern = /ch[uư][oô]ng|chapter|chap|t[aập]p|tap|ep|h[oồ]i|đ|đệ|đề|ti[eết]t|quy[eể]n/gi
-        let bestNum: number | null = null
-        let bestDist = Infinity
-        for (const kw of Array.from(t.matchAll(kwPattern))) {
-          const kwEnd = kw.index! + kw[0].length
-          for (const nm of allNums) {
-            const dist = Math.min(Math.abs(nm.index! - kwEnd), Math.abs(kw.index! - (nm.index! + nm[1].length)))
-            if (dist < bestDist) { bestDist = dist; bestNum = parseInt(nm[1]) }
-          }
-        }
-        if (bestNum !== null) return bestNum
-
-        // 4. First number
-        return parseInt(allNums[0][1])
-      }
-
-      const sel3 = cfg.chapterListSel || 'a[href]'
-      $( sel3).each((_, el) => {
-        const $a = $(el).is('a') ? $(el) : $(el).find('a').first()
-        if (!$a.length) return
-        const href = $a.attr('href') ?? ''
-        if (!href || href === '#' || href.startsWith('javascript') || href.startsWith('mailto')) return
-        const text = $a.attr('title') || $a.text().trim()
-        const num = guessNum(text, href)
-        if (num !== null && num > 0 && num < 100000) {
+      // Pattern 3: Last resort — single-page scan using chapterListSel or broad selector
+      {
+        const $ = cheerio.load(html)
+        const rawChaps: { title: string; chUrl: string }[] = []
+        const sel3 = cfg.chapterListSel || 'a[href]'
+        $(sel3).each((_, el) => {
+          const $a = $(el).is('a') ? $(el) : $(el).find('a').first()
+          if (!$a.length) return
+          const href = $a.attr('href') ?? ''
+          if (!href || href === '#' || href.startsWith('javascript') || href.startsWith('mailto')) return
+          const text = $a.attr('title') || $a.text().trim()
           const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : ''
-          if (chUrl && !allChapters.find(c => c.num === num)) {
-            allChapters.push({ num, title: text || `Chương ${num}`, url: chUrl })
-          }
-        }
-      })
-      allChapters.sort((a, b) => a.num - b.num)
-      return allChapters
+          if (!chUrl) return
+          if (rawChaps.find(c => c.chUrl === chUrl)) return
+          rawChaps.push({ title: text || chUrl, chUrl })
+        })
+        return rawChaps.map((c, i) => ({ num: i + 1, title: c.title, url: c.chUrl }))
+      }
     },
 
     // ── Chapter content ─────────────────────────────────────────────────────────
