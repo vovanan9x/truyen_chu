@@ -172,6 +172,9 @@ export default function AdminCrawlerPage() {
   const [autoDetecting, setAutoDetecting] = useState(false)
   const [detectPreview, setDetectPreview] = useState<Record<string,string>|null>(null)
   const [detectError, setDetectError] = useState('')
+  // Persistent failed URL list — survives page refresh
+  const [savedFailedUrls, setSavedFailedUrls] = useState<string[]>([])
+  const FAILED_KEY = 'batch_crawl_failed_urls'
 
   // --- DB Logs tab ---
   const [dbLogs, setDbLogs] = useState<CrawlLog[]>([])
@@ -232,6 +235,33 @@ export default function AdminCrawlerPage() {
 
   useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [activeJob?.logs])
   useEffect(() => { fetchHistory() }, [])
+  // Load saved failed URLs from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('batch_crawl_failed_urls')
+      if (raw) setSavedFailedUrls(JSON.parse(raw))
+    } catch {}
+  }, [])
+
+  function addToFailedQueue(url: string) {
+    setSavedFailedUrls(prev => {
+      if (prev.includes(url)) return prev
+      const next = [...prev, url]
+      try { localStorage.setItem('batch_crawl_failed_urls', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+  function removeFromFailedQueue(url: string) {
+    setSavedFailedUrls(prev => {
+      const next = prev.filter(u => u !== url)
+      try { localStorage.setItem('batch_crawl_failed_urls', JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+  function clearFailedQueue() {
+    setSavedFailedUrls([])
+    try { localStorage.removeItem('batch_crawl_failed_urls') } catch {}
+  }
 
   const fetchHistory = async () => {
     const res = await fetch('/api/admin/crawl/status/list')
@@ -1170,17 +1200,19 @@ export default function AdminCrawlerPage() {
                               :`  ✅ ${slug}: ${chCount} ch.`
                             setBatchLogs(p=>[...p,line])
                             if(failCount>0){setBatchErrorCount(n=>n+failCount)}
+                            else { removeFromFailedQueue(storyUrl) } // success — remove from saved error list
                             done=true
                           }
                         }
                         attempts++
                       }
-                      if(!done)setBatchLogs(p=>[...p,`  ⏳ ${slug}: timeout 30 phút`])
+                      if(!done){ setBatchLogs(p=>[...p,`  ⏳ ${slug}: timeout 30 phút`]); addToFailedQueue(storyUrl) }
                       setBatchStoryStatus(p=>({...p,[idx]:'done'}))
                     }catch(e:any){
                       setBatchLogs(p=>[...p,`  ❌ ${slug}: ${e.message}`])
                       setBatchStoryStatus(p=>({...p,[idx]:'failed'}))
                       setBatchErrorCount(n=>n+1)
+                      addToFailedQueue(storyUrl) // persist to localStorage for later retry
                     }
                     localDone++; setBatchDone(p=>p+1)
                   }

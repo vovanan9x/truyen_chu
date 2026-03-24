@@ -11,6 +11,33 @@ import type { ChapterRef } from '@/lib/crawl-adapters'
 // Global job counter — used to pick sticky proxy in round-robin
 let _jobCounter = 0
 
+// ─── Proxy Health Tracker ──────────────────────────────────────────────────
+// Tracks which proxies are on cooldown after hitting 503.
+// Cooldown = 15 minutes by default (matches CF temp-ban duration).
+const _proxyHealth = new Map<string, number>() // proxyUrl → coolingUntil (ms timestamp)
+
+function markProxyCooling(proxyUrl: string, coolMs = 15 * 60 * 1000) {
+  _proxyHealth.set(proxyUrl, Date.now() + coolMs)
+  console.log(`[Proxy] 🔴 Cooling: ${proxyUrl.replace(/:([^:@]+)@/, ':***@')} for ${coolMs / 60000}min`)
+}
+
+function getHealthyProxy(proxies: string[]): string | undefined {
+  if (!proxies.length) return undefined
+  const now = Date.now()
+  const healthy = proxies.filter(p => (_proxyHealth.get(p) ?? 0) < now)
+  if (healthy.length > 0) {
+    // Round-robin among healthy proxies
+    return healthy[_jobCounter % healthy.length]
+  }
+  // All cooling → use the one with the shortest remaining cooldown (least bad option)
+  const soonest = proxies.reduce((a, b) =>
+    (_proxyHealth.get(a) ?? 0) < (_proxyHealth.get(b) ?? 0) ? a : b
+  )
+  const remainSec = Math.round(((_proxyHealth.get(soonest) ?? 0) - now) / 1000)
+  console.log(`[Proxy] ⚠️ All proxies cooling — fallback to soonest (${remainSec}s remaining): ${soonest.replace(/:([^:@]+)@/, ':***@')}`)
+  return soonest
+}
+
 // Slugify Vietnamese text
 function slugify(str: string): string {
   return str.toLowerCase()
@@ -20,19 +47,21 @@ function slugify(str: string): string {
     .replace(/-+/g, '-').replace(/^-|-$/g, '')
 }
 
-// ─── Fetch with retry + exponential backoff ────────────────────────────────
+// ─── Fetch with retry + smart proxy switching on 503 ──────────────────────
 async function fetchWithRetry(
   url: string,
   timeout = 15000,
   maxRetries = 3,
   cookies?: string,
   stickyProxyUrl?: string,
-  onRetry?: (msg: string) => void
+  onRetry?: (msg: string) => void,
+  proxyPool?: string[]  // full proxy list — used to switch proxy on 503
 ): Promise<{ html: string; attempts: number }> {
   let lastError: Error = new Error('Unknown error')
+  let currentProxy = stickyProxyUrl
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const html = await fetchUrl(url, timeout, cookies, stickyProxyUrl)
+      const html = await fetchUrl(url, timeout, cookies, currentProxy)
       return { html, attempts: attempt }
     } catch (e: any) {
       lastError = e
@@ -40,16 +69,30 @@ async function fetchWithRetry(
       // 404 → give up immediately
       if (msg.includes('404')) throw e
       if (attempt < maxRetries) {
-        // 503 = Cloudflare temporary ban → wait long (45s first retry, 90s second)
         const is503 = msg.includes('503') || msg.includes('Service Unavailable')
-        // 429 = rate limit → wait 5s base
         const is429 = msg.includes('429') || msg.includes('Too Many')
-        const baseDelay = is503 ? 45000 : is429 ? 5000 : 2000
-        const delay = baseDelay * attempt // linear for 503 (45s, 90s)
-        const delaySec = Math.round(delay / 1000)
-        const reason = is503 ? `HTTP 503 (CF block)` : is429 ? `HTTP 429 (rate limit)` : msg.slice(0, 40)
-        onRetry?.(`⏳ ${reason} — chờ ${delaySec}s rồi retry (lần ${attempt}/${maxRetries - 1})`)
-        await new Promise(r => setTimeout(r, delay))
+
+        if (is503 && currentProxy && proxyPool && proxyPool.length > 1) {
+          // Mark this proxy as cooling and switch to a healthy one
+          markProxyCooling(currentProxy)
+          const newProxy = getHealthyProxy(proxyPool.filter(p => p !== currentProxy))
+            ?? getHealthyProxy(proxyPool)
+          const switched = newProxy !== currentProxy
+          currentProxy = newProxy
+          const proxyInfo = switched
+            ? `→ chuyển sang proxy mới`
+            : `→ mọi proxy đang cooling, dùng proxy ít block nhất`
+          onRetry?.(`🔀 HTTP 503 (CF block) — ${proxyInfo} | retry ngay (lần ${attempt}/${maxRetries - 1})`)
+          // No long wait when switching proxy — the new proxy is fresh
+          await new Promise(r => setTimeout(r, 3000))
+        } else {
+          const baseDelay = is503 ? 45000 : is429 ? 5000 : 2000
+          const delay = baseDelay * attempt
+          const delaySec = Math.round(delay / 1000)
+          const reason = is503 ? `HTTP 503 (CF block)` : is429 ? `HTTP 429` : msg.slice(0, 40)
+          onRetry?.(`⏳ ${reason} — chờ ${delaySec}s rồi retry (lần ${attempt}/${maxRetries - 1})`)
+          await new Promise(r => setTimeout(r, delay))
+        }
       }
     }
   }
@@ -90,14 +133,14 @@ async function runCrawlJob(
   addLog(jobId, `🚀 Bắt đầu crawl: ${url}`)
   addLog(jobId, `⚙️ Cấu hình: concurrency=${concurrency} | delay=${batchDelay}ms | overwrite=${overwrite}`)
 
-  // ── Sticky proxy: pick 1 proxy for this entire job ──────────────────────
+  // ── Sticky proxy: pick 1 healthy proxy for this job ────────────────────
   const crawlSettings = await getCrawlSettings()
-  const stickyProxy = crawlSettings.proxies.length > 0
-    ? crawlSettings.proxies[_jobCounter % crawlSettings.proxies.length]
-    : undefined
+  const proxyPool = crawlSettings.proxies
+  const stickyProxy = getHealthyProxy(proxyPool)
   _jobCounter++
   if (stickyProxy) {
-    addLog(jobId, `🔗 Sticky proxy: ${stickyProxy.replace(/:([^:@]+)@/, ':***@')} (proxy #${(_jobCounter - 1) % crawlSettings.proxies.length + 1}/${crawlSettings.proxies.length})`)
+    const idx = proxyPool.indexOf(stickyProxy) + 1
+    addLog(jobId, `🔗 Sticky proxy: ${stickyProxy.replace(/:([^:@]+)@/, ':***@')} (proxy #${idx}/${proxyPool.length})`)
   }
   // ────────────────────────────────────────────────────────────────────────
 
@@ -113,7 +156,7 @@ async function runCrawlJob(
     let storyHtml: string
     try {
       const result = await fetchWithRetry(url, 15000, 3, siteCookies, stickyProxy,
-        (m) => addLog(jobId, m))
+        (m) => addLog(jobId, m), proxyPool)
       storyHtml = result.html
     } catch (e: any) {
       const msg = e?.message ?? 'Không tải được trang truyện'
@@ -289,13 +332,14 @@ async function runCrawlJob(
           return
         }
 
-        // Fetch with retry
+        // Fetch with retry + proxy switching on 503
         let html: string
         let attempts = 1
         let lastRetryMsg = ''
+        let chProxy = stickyProxy // may switch on 503
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
-            const res = await fetchWithRetry(ch.url, 12000, 1, siteCookies, stickyProxy) // 1 try per call, we manage retries here
+            const res = await fetchWithRetry(ch.url, 12000, 1, siteCookies, chProxy) // 1 try per call, we manage retries here
             html = res.html
             attempts = attempt
             break
@@ -304,11 +348,18 @@ async function runCrawlJob(
             lastRetryMsg = e?.message ?? ''
             const is503 = lastRetryMsg.includes('503') || lastRetryMsg.includes('Service Unavailable')
             const isRateLimit = lastRetryMsg.includes('429') || lastRetryMsg.includes('Too Many')
-            const delay = is503 ? 45000 * attempt : isRateLimit ? 8000 * attempt : 2000 * attempt
-            const delaySec = Math.round(delay / 1000)
-            const reason = is503 ? `HTTP 503 (CF block)` : isRateLimit ? `HTTP 429` : lastRetryMsg.slice(0, 60)
-            addLog(jobId, `  ⏳ Ch.${ch.num} ${reason} — chờ ${delaySec}s rồi retry (${attempt}/3)`)
-            await new Promise(r => setTimeout(r, delay))
+            if (is503 && chProxy && proxyPool.length > 1) {
+              markProxyCooling(chProxy)
+              chProxy = getHealthyProxy(proxyPool.filter(p => p !== chProxy)) ?? getHealthyProxy(proxyPool)
+              addLog(jobId, `  🔀 Ch.${ch.num} HTTP 503 — chuyển proxy | retry ngay (${attempt}/3)`)
+              await new Promise(r => setTimeout(r, 3000))
+            } else {
+              const delay = is503 ? 45000 * attempt : isRateLimit ? 8000 * attempt : 2000 * attempt
+              const delaySec = Math.round(delay / 1000)
+              const reason = is503 ? `HTTP 503 (CF block)` : isRateLimit ? `HTTP 429` : lastRetryMsg.slice(0, 60)
+              addLog(jobId, `  ⏳ Ch.${ch.num} ${reason} — chờ ${delaySec}s rồi retry (${attempt}/3)`)
+              await new Promise(r => setTimeout(r, delay))
+            }
           }
         }
 

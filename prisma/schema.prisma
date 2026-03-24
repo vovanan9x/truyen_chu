@@ -36,6 +36,7 @@ enum TransactionType {
   DEPOSIT
   UNLOCK
   DONATE
+  WITHDRAWAL
 }
 
 enum TransactionStatus {
