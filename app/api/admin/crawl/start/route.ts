@@ -35,11 +35,16 @@ async function fetchWithRetry(
       return { html, attempts: attempt }
     } catch (e: any) {
       lastError = e
-      if (e?.message?.includes('404')) throw e
+      const msg: string = e?.message ?? ''
+      // 404 → give up immediately
+      if (msg.includes('404')) throw e
       if (attempt < maxRetries) {
-        const isRateLimit = e?.message?.includes('429') || e?.message?.includes('Too Many')
-        const baseDelay = isRateLimit ? 5000 : 2000
-        const delay = baseDelay * Math.pow(2, attempt - 1)
+        // 503 = Cloudflare temporary ban → wait long (45s first retry, 90s second)
+        const is503 = msg.includes('503') || msg.includes('Service Unavailable')
+        // 429 = rate limit → wait 5s base
+        const is429 = msg.includes('429') || msg.includes('Too Many')
+        const baseDelay = is503 ? 45000 : is429 ? 5000 : 2000
+        const delay = baseDelay * attempt // linear for 503 (45s, 90s), exponential for others
         await new Promise(r => setTimeout(r, delay))
       }
     }
