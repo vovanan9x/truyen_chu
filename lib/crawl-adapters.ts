@@ -41,9 +41,9 @@ async function getKeepAliveAgent(url: string): Promise<any | null> {
   } catch { return null }
 }
 
-async function getProxyAgent() {
+async function getProxyAgent(stickyProxyUrl?: string) {
   const settings = await getCrawlSettings()
-  const proxyUrl = getNextProxyUrl(settings.proxies)
+  const proxyUrl = stickyProxyUrl ?? getNextProxyUrl(settings.proxies)
   if (!proxyUrl) return null
 
   if (_proxyAgentCache.has(proxyUrl)) return _proxyAgentCache.get(proxyUrl)
@@ -93,7 +93,7 @@ export interface SiteAdapter {
 
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 
-export async function fetchUrl(url: string, timeout = 15000, cookies?: string): Promise<string> {
+export async function fetchUrl(url: string, timeout = 15000, cookies?: string, stickyProxyUrl?: string): Promise<string> {
   const headers = {
     ...FETCH_HEADERS,
     ...(cookies ? { 'Cookie': cookies } : {}),
@@ -102,7 +102,7 @@ export async function fetchUrl(url: string, timeout = 15000, cookies?: string): 
   // Helper: do 1 fetch attempt (with optional proxy)
   async function doFetch(extraCookies?: string): Promise<Response> {
     const h = extraCookies ? { ...headers, 'Cookie': extraCookies } : headers
-    const proxyAgent = await getProxyAgent()
+    const proxyAgent = await getProxyAgent(stickyProxyUrl)
     if (proxyAgent) {
       const { fetch: undiciFetch } = await import('undici')
       return (undiciFetch as any)(url, { headers: h, signal: AbortSignal.timeout(timeout), redirect: 'follow', dispatcher: proxyAgent })

@@ -5,7 +5,11 @@ import { randomUUID } from 'crypto'
 import { revalidatePath } from 'next/cache'
 import { createJob, updateJob, addLog, isCancelled } from '@/lib/crawl-jobs'
 import { getAdapterWithDbConfig, fetchUrl, countWordsInHtml, downloadAndSaveCover } from '@/lib/crawl-adapters'
+import { getCrawlSettings } from '@/lib/crawl-settings'
 import type { ChapterRef } from '@/lib/crawl-adapters'
+
+// Global job counter — used to pick sticky proxy in round-robin
+let _jobCounter = 0
 
 // Slugify Vietnamese text
 function slugify(str: string): string {
@@ -21,12 +25,13 @@ async function fetchWithRetry(
   url: string,
   timeout = 15000,
   maxRetries = 3,
-  cookies?: string
+  cookies?: string,
+  stickyProxyUrl?: string
 ): Promise<{ html: string; attempts: number }> {
   let lastError: Error = new Error('Unknown error')
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const html = await fetchUrl(url, timeout, cookies)
+      const html = await fetchUrl(url, timeout, cookies, stickyProxyUrl)
       return { html, attempts: attempt }
     } catch (e: any) {
       lastError = e
@@ -76,6 +81,17 @@ async function runCrawlJob(
   addLog(jobId, `🚀 Bắt đầu crawl: ${url}`)
   addLog(jobId, `⚙️ Cấu hình: concurrency=${concurrency} | delay=${batchDelay}ms | overwrite=${overwrite}`)
 
+  // ── Sticky proxy: pick 1 proxy for this entire job ──────────────────────
+  const crawlSettings = await getCrawlSettings()
+  const stickyProxy = crawlSettings.proxies.length > 0
+    ? crawlSettings.proxies[_jobCounter % crawlSettings.proxies.length]
+    : undefined
+  _jobCounter++
+  if (stickyProxy) {
+    addLog(jobId, `🔗 Sticky proxy: ${stickyProxy.replace(/:([^:@]+)@/, ':***@')} (proxy #${(_jobCounter - 1) % crawlSettings.proxies.length + 1}/${crawlSettings.proxies.length})`)
+  }
+  // ────────────────────────────────────────────────────────────────────────
+
   const { adapter, cookies: siteCookies } = await getAdapterWithDbConfig(url)
   addLog(jobId, `🔌 Adapter: ${adapter.name}${siteCookies ? ' 🍪 Cookie: đã cấu hình' : ''}`)
 
@@ -87,7 +103,7 @@ async function runCrawlJob(
     addLog(jobId, '📥 Đang tải trang truyện...')
     let storyHtml: string
     try {
-      const result = await fetchWithRetry(url, 15000, 3, siteCookies)
+      const result = await fetchWithRetry(url, 15000, 3, siteCookies, stickyProxy)
       storyHtml = result.html
     } catch (e: any) {
       const msg = e?.message ?? 'Không tải được trang truyện'
@@ -195,7 +211,7 @@ async function runCrawlJob(
       } else {
         let pageUrl: string | undefined = url; let pageCount = 0
         while (pageUrl && pageCount < 50) {
-          const pageHtml = pageUrl === url ? storyHtml : await fetchUrl(pageUrl, 15000, siteCookies)
+          const pageHtml = pageUrl === url ? storyHtml : await fetchUrl(pageUrl, 15000, siteCookies, stickyProxy)
           const { chapters, nextPageUrl } = adapter.fetchChapterList(pageUrl, pageHtml)
           allChapters = [...allChapters, ...chapters]
           pageUrl = nextPageUrl; pageCount++
@@ -269,7 +285,7 @@ async function runCrawlJob(
         let lastRetryMsg = ''
         for (let attempt = 1; attempt <= 3; attempt++) {
           try {
-            const res = await fetchWithRetry(ch.url, 12000, 1, siteCookies) // 1 try per call, we manage retries here
+            const res = await fetchWithRetry(ch.url, 12000, 1, siteCookies, stickyProxy) // 1 try per call, we manage retries here
             html = res.html
             attempts = attempt
             break
