@@ -605,7 +605,7 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
           if (rawChaps.find(c => c.chUrl === chUrl)) return
           rawChaps.push({ title: text || chUrl, chUrl })
         })
-        return assignChapterNums(rawChaps)
+        return rawChaps.map((c, i) => ({ num: i + 1, title: c.title, url: c.chUrl }))
       }
     },
 
