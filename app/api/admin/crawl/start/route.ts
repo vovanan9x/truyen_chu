@@ -26,7 +26,8 @@ async function fetchWithRetry(
   timeout = 15000,
   maxRetries = 3,
   cookies?: string,
-  stickyProxyUrl?: string
+  stickyProxyUrl?: string,
+  onRetry?: (msg: string) => void
 ): Promise<{ html: string; attempts: number }> {
   let lastError: Error = new Error('Unknown error')
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -44,7 +45,10 @@ async function fetchWithRetry(
         // 429 = rate limit → wait 5s base
         const is429 = msg.includes('429') || msg.includes('Too Many')
         const baseDelay = is503 ? 45000 : is429 ? 5000 : 2000
-        const delay = baseDelay * attempt // linear for 503 (45s, 90s), exponential for others
+        const delay = baseDelay * attempt // linear for 503 (45s, 90s)
+        const delaySec = Math.round(delay / 1000)
+        const reason = is503 ? `HTTP 503 (CF block)` : is429 ? `HTTP 429 (rate limit)` : msg.slice(0, 40)
+        onRetry?.(`⏳ ${reason} — chờ ${delaySec}s rồi retry (lần ${attempt}/${maxRetries - 1})`)
         await new Promise(r => setTimeout(r, delay))
       }
     }
@@ -108,7 +112,8 @@ async function runCrawlJob(
     addLog(jobId, '📥 Đang tải trang truyện...')
     let storyHtml: string
     try {
-      const result = await fetchWithRetry(url, 15000, 3, siteCookies, stickyProxy)
+      const result = await fetchWithRetry(url, 15000, 3, siteCookies, stickyProxy,
+        (m) => addLog(jobId, m))
       storyHtml = result.html
     } catch (e: any) {
       const msg = e?.message ?? 'Không tải được trang truyện'
@@ -297,9 +302,12 @@ async function runCrawlJob(
           } catch (e: any) {
             if (attempt === 3) throw e
             lastRetryMsg = e?.message ?? ''
+            const is503 = lastRetryMsg.includes('503') || lastRetryMsg.includes('Service Unavailable')
             const isRateLimit = lastRetryMsg.includes('429') || lastRetryMsg.includes('Too Many')
-            const delay = isRateLimit ? 8000 * attempt : 2000 * attempt
-            addLog(jobId, `  ↩️ Ch.${ch.num} retry ${attempt}/3 sau ${delay / 1000}s — ${lastRetryMsg.slice(0, 80)}`)
+            const delay = is503 ? 45000 * attempt : isRateLimit ? 8000 * attempt : 2000 * attempt
+            const delaySec = Math.round(delay / 1000)
+            const reason = is503 ? `HTTP 503 (CF block)` : isRateLimit ? `HTTP 429` : lastRetryMsg.slice(0, 60)
+            addLog(jobId, `  ⏳ Ch.${ch.num} ${reason} — chờ ${delaySec}s rồi retry (${attempt}/3)`)
             await new Promise(r => setTimeout(r, delay))
           }
         }
