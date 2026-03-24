@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import Link from 'next/link'
-import { Search, Lock, ArrowUpDown, BookOpen, X, ChevronDown, ChevronRight } from 'lucide-react'
+import { Search, Lock, ArrowUpDown, BookOpen, X, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 
 interface Chapter {
@@ -14,21 +14,42 @@ interface Chapter {
 }
 
 interface Props {
-  chapters: Chapter[]
+  chapters: Chapter[]       // initial 50 chapters from SSR (for instant render)
   storySlug: string
   totalChapters: number
 }
 
 const GROUP_SIZE = 50
 
-export default function ChapterListClient({ chapters, storySlug, totalChapters }: Props) {
+export default function ChapterListClient({ chapters: initialChapters, storySlug, totalChapters }: Props) {
   const [search, setSearch] = useState('')
   const [sortDesc, setSortDesc] = useState(true)
 
-  // Sort chapters asc (ch.1 → ch.N) for grouping; display order follows sortDesc
+  // All chapters — start with SSR data, then lazy-load full list if there are more
+  const [allChapters, setAllChapters] = useState<Chapter[]>(initialChapters)
+  const [loading, setLoading] = useState(false)
+  const [fullyLoaded, setFullyLoaded] = useState(initialChapters.length >= totalChapters)
+
+  // Lazy-load full chapter list if SSR only returned a partial set
+  useEffect(() => {
+    if (initialChapters.length >= totalChapters) return // already complete
+    setLoading(true)
+    fetch(`/api/stories/${storySlug}/chapters`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.chapters?.length) {
+          setAllChapters(d.chapters)
+          setFullyLoaded(true)
+        }
+      })
+      .catch(() => { /* keep SSR data if fetch fails */ })
+      .finally(() => setLoading(false))
+  }, [storySlug, totalChapters, initialChapters.length])
+
+  // Sort chapters asc for grouping
   const sorted = useMemo(() => {
-    return [...chapters].sort((a, b) => a.chapterNum - b.chapterNum)
-  }, [chapters])
+    return [...allChapters].sort((a, b) => a.chapterNum - b.chapterNum)
+  }, [allChapters])
 
   // Group chapters into blocks of GROUP_SIZE
   const groups = useMemo(() => {
@@ -48,7 +69,12 @@ export default function ChapterListClient({ chapters, storySlug, totalChapters }
   // Default: open last group (newest chapters)
   const [openGroupIdx, setOpenGroupIdx] = useState<number>(() => Math.max(0, groups.length - 1))
 
-  // Search bypass grouping
+  // Keep openGroupIdx pointing to last group when more chapters load in
+  useEffect(() => {
+    setOpenGroupIdx(Math.max(0, groups.length - 1))
+  }, [groups.length])
+
+  // Search — searches across ALL loaded chapters
   const searchResults = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return null
@@ -79,8 +105,9 @@ export default function ChapterListClient({ chapters, storySlug, totalChapters }
         <div className="flex items-center gap-3">
           <div className="w-1 h-5 rounded-full gradient-primary flex-shrink-0" />
           <h2 className="text-lg font-bold">Danh sách chương</h2>
-          <span className="text-sm text-muted-foreground">
+          <span className="text-sm text-muted-foreground flex items-center gap-1.5">
             ({search ? `${searchResults?.length ?? 0}/` : ''}{totalChapters} chương)
+            {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -133,7 +160,6 @@ export default function ChapterListClient({ chapters, storySlug, totalChapters }
         /* Accordion group mode */
         <div className="space-y-1.5">
           {displayGroups.map((g, displayIdx) => {
-            // Map back to actual group index for openGroupIdx state
             const actualIdx = sortDesc ? groups.length - 1 - displayIdx : displayIdx
             const isOpen = openGroupIdx === actualIdx
             const chaps = isOpen ? openGroupChapters : []
@@ -167,6 +193,14 @@ export default function ChapterListClient({ chapters, storySlug, totalChapters }
               </div>
             )
           })}
+
+          {/* Loading skeleton — shown while fetching remaining chapters */}
+          {loading && !fullyLoaded && (
+            <div className="flex items-center justify-center py-6 gap-2 text-sm text-muted-foreground">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Đang tải danh sách chương...
+            </div>
+          )}
         </div>
       )}
     </div>
