@@ -355,6 +355,11 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
        * 5. No number → null (caller uses list index)
        */
       function extractChapNum(text: string, href: string): number | null {
+        // 0. Highest priority: title prefix "1: Title" — user-visible sequential number
+        //    (Sites like metruyenchu use internal DB IDs in URLs but show seq numbers in title)
+        const titlePrefix = text.match(/^(\d+)\s*[:：]/)
+        if (titlePrefix) return parseInt(titlePrefix[1])
+
         // 1. Explicit chapter number in URL
         const urlNum = href.match(/(?:chuong|chapter|chap|tap|ep|phần|phan)[_-](\d+)/i)
         if (urlNum) return parseInt(urlNum[1])
@@ -512,10 +517,16 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
                 if (!chUrl) return
                 if (chapters.find(c => c.url === chUrl)) return
 
-                // Try number from URL: /chuong-5-slug
+                // Highest priority: title prefix "1: Title" or "Chương 1:" — user-visible number
                 let num: number | undefined
-                const urlNum = href.match(/(?:chuong|chapter|chap)[_-](\d+)/i)
-                if (urlNum) num = parseInt(urlNum[1])
+                const titlePrefix = text.match(/^(\d+)\s*[：:]/)
+                if (titlePrefix) { num = parseInt(titlePrefix[1]) }
+
+                // Try number from URL: /chuong-5-slug
+                if (!num) {
+                  const urlNum = href.match(/(?:chuong|chapter|chap)[_-](\d+)/i)
+                  if (urlNum) num = parseInt(urlNum[1])
+                }
 
                 // Try number from text: "Đề 5", "Chương 5", "Hồi 5"
                 if (!num) {
