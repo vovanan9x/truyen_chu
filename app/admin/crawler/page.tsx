@@ -1184,17 +1184,23 @@ export default function AdminCrawlerPage() {
                     setBatchDone(p=>p+1)
                   }
 
-                  // Run in parallel chunks — stop if batchStopRef is set
-                  for(let i=0;i<batchStories.length;i+=batchParallelStories){
-                    if(batchStopRef.current){
-                      setBatchLogs(p=>[...p,`🛑 Dừng batch bởi người dùng — đã xử lý ${batchDone}/${batchStories.length} truyện`])
-                      break
+                  // Sliding window — ngay khi 1 truyện xong, bắt đầu truyện tiếp theo
+                  // (không đợi cả chunk xong mới chạy tiếp như Promise.allSettled chunk)
+                  let qIdx = 0
+                  const workers: Promise<void>[] = []
+
+                  async function runWorker() {
+                    while (qIdx < batchStories.length) {
+                      if (batchStopRef.current) break
+                      const i = qIdx++
+                      await crawlOneStory(batchStories[i], i)
+                      if (!batchStopRef.current && batchDelaySec > 0 && qIdx < batchStories.length)
+                        await new Promise(r => setTimeout(r, batchDelaySec * 1000))
                     }
-                    const chunk=batchStories.slice(i,i+batchParallelStories)
-                    await Promise.allSettled(chunk.map((url,j)=>crawlOneStory(url,i+j)))
-                    if(i+batchParallelStories<batchStories.length && !batchStopRef.current)
-                      await new Promise(r=>setTimeout(r,batchDelaySec*1000))
                   }
+
+                  for (let w = 0; w < batchParallelStories; w++) workers.push(runWorker())
+                  await Promise.allSettled(workers)
 
                   setBatchLogs(p=>[...p,`🎉 Xong! ${batchDone}/${batchStories.length} truyện đã xử lý`])
                   setBatchRunning(false)
