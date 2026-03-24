@@ -38,7 +38,9 @@ export default function StoryCard({ story }: { story: StoryCardData }) {
               fill
               sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
               className="object-cover group-hover:scale-105 transition-transform duration-500"
+              unoptimized={story.coverUrl.startsWith('/uploads/') || story.coverUrl.startsWith('/avatars/')}
             />
+
           ) : (
             <div className="w-full h-full gradient-primary flex items-center justify-center">
               <BookOpen className="w-12 h-12 text-white/60" />

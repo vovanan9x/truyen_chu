@@ -11,6 +11,7 @@ const nextConfig = {
 
   // ─── Image whitelist (không dùng ** để tránh lạm dụng proxy) ─────────────
   images: {
+    minimumCacheTTL: 86400, // 1 day — refresh external cover images daily instead of yearly
     remotePatterns: [
       // Google / GitHub avatar
       { protocol: 'https', hostname: 'lh3.googleusercontent.com' },
@@ -28,6 +29,7 @@ const nextConfig = {
       { protocol: 'https', hostname: '**' },
     ],
   },
+
 
   // ─── HTTP Security Headers ────────────────────────────────────────────────
   async headers() {
