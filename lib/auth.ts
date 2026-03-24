@@ -78,9 +78,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           try {
             const freshUser = await prisma.user.findUnique({
               where: { id: token.id as string },
-              select: { role: true },
+              select: { role: true, isBanned: true },
             })
-            if (freshUser) token.role = freshUser.role
+            if (freshUser) {
+              if (freshUser.isBanned) return null // terminate session immediately
+              token.role = freshUser.role
+            }
           } catch {
             // Ignore nếu chạy ở Edge (prisma không available)
           }
