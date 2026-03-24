@@ -2,11 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 
-// DELETE /api/admin/stories/[storyId]/chapters/bulk-delete
+// DELETE /api/admin/stories/[id]/chapters/bulk-delete
 // Body: { ids: string[] }
 export async function DELETE(
   req: NextRequest,
-  { params }: { params: { storyId: string } }
+  { params }: { params: { id: string } }
 ) {
   const session = await auth()
   if (!session || !['ADMIN', 'MOD'].includes(session.user.role)) {
@@ -25,7 +25,7 @@ export async function DELETE(
   const count = await prisma.chapter.deleteMany({
     where: {
       id: { in: ids },
-      storyId: params.storyId,
+      storyId: params.id,
     },
   })
 
