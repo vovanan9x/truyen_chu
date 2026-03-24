@@ -481,7 +481,7 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
           // Collect raw chapter links in source order — no number extraction
           const rawChaps: { title: string; chUrl: string }[] = []
           let page = 1
-          while (page <= 200) {
+          while (page <= 2000) {
             const apiUrl = (apiUrlTemplate.includes('{storyId}')
               ? apiUrlTemplate.replace('{storyId}', storyId)
               : apiUrlTemplate
@@ -535,6 +535,7 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
               await new Promise(r => setTimeout(r, 300))
             } catch { break }
           }
+          if (page > 2000) console.warn(`[fetchAllChapters] Hit 2000-page AJAX limit — story may have more chapters: ${storyUrl}`)
           if (rawChaps.length > 0) {
             // Assign sequential chapter numbers based on position in source list
             return rawChaps.map((c, i) => ({ num: i + 1, title: c.title, url: c.chUrl }))
@@ -546,7 +547,7 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
       {
         let pageUrl: string | undefined = storyUrl
         let pageCount = 0
-        const MAX_HTML_PAGES = 100
+        const MAX_HTML_PAGES = 500
         const rawChaps: { title: string; chUrl: string }[] = []
 
         while (pageUrl && pageCount < MAX_HTML_PAGES) {
