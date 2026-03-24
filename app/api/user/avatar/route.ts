@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { writeFile, mkdir } from 'fs/promises'
-import { join, extname } from 'path'
+import { writeFile, mkdir, unlink } from 'fs/promises'
+import { join } from 'path'
 
 const ALLOWED_TYPES: Record<string, string> = {
   'image/jpeg': '.jpg',
-  'image/jpg': '.jpg',
-  'image/png': '.png',
-  'image/gif': '.gif',
+  'image/jpg':  '.jpg',
+  'image/png':  '.png',
+  'image/gif':  '.gif',
   'image/webp': '.webp',
 }
 const MAX_SIZE = 2 * 1024 * 1024 // 2 MB
@@ -19,10 +19,8 @@ export async function POST(req: NextRequest) {
 
   const formData = await req.formData()
   const file = formData.get('file') as File | null
-
   if (!file) return NextResponse.json({ error: 'Không có file' }, { status: 400 })
 
-  // Kiểm tra type
   const ext = ALLOWED_TYPES[file.type]
   if (!ext) {
     return NextResponse.json(
@@ -31,16 +29,19 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // Kiểm tra kích thước
   if (file.size > MAX_SIZE) {
     return NextResponse.json({ error: 'File tối đa 2 MB' }, { status: 400 })
   }
 
-  // Tạo thư mục nếu chưa có
+  // Lấy avatar cũ trước khi overwrite
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { avatar: true },
+  })
+
   const uploadDir = join(process.cwd(), 'public', 'avatars')
   await mkdir(uploadDir, { recursive: true })
 
-  // Tên file: userId + timestamp để tránh cache cũ
   const filename = `${session.user.id}_${Date.now()}${ext}`
   const filepath = join(uploadDir, filename)
 
@@ -54,6 +55,12 @@ export async function POST(req: NextRequest) {
     where: { id: session.user.id },
     data: { avatar: avatarUrl },
   })
+
+  // Xóa file avatar cũ sau khi lưu thành công (tránh disk đầy)
+  if (user?.avatar && user.avatar.startsWith('/avatars/')) {
+    const oldPath = join(process.cwd(), 'public', user.avatar)
+    unlink(oldPath).catch(() => {}) // bỏ qua lỗi nếu file không tồn tại
+  }
 
   return NextResponse.json({ success: true, avatarUrl })
 }

@@ -66,9 +66,21 @@ server {
         access_log off;
     }
 
-    # ── Uploads (ảnh bìa crawl về) — serve trực tiếp, KHÔNG qua Next.js ───────
+    # ── Uploads — serve trực tiếp, KHÔNG qua Next.js ────────────────────────
+    # Cấu trúc thư mục:
+    #   uploads/covers/  — ảnh bìa crawl tự động
+    #   uploads/assets/  — ảnh do admin upload tay (logo, banner...)
+    #   avatars/         — avatar người dùng
     location /uploads/ {
         alias /var/www/truyen_chu/public/uploads/;
+        expires 30d;
+        add_header Cache-Control "public, max-age=2592000";
+        access_log off;
+        try_files $uri =404;
+    }
+
+    location /avatars/ {
+        alias /var/www/truyen_chu/public/avatars/;
         expires 30d;
         add_header Cache-Control "public, max-age=2592000";
         access_log off;

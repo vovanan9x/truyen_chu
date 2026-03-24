@@ -839,12 +839,19 @@ export async function downloadAndSaveCover(imageUrl: string, storyUrl?: string):
 
     if (!res.ok) {
       console.warn(`[Cover] ⚠️ Failed to download ${imageUrl} — status ${res.status}. Storing external URL.`)
-      return imageUrl  // fallback: store original URL, Next.js will serve it via remote optimization
+      return imageUrl
     }
 
     const contentType = res.headers.get('content-type') ?? ''
-    // Verify it's actually an image
     if (contentType && !contentType.startsWith('image/') && !contentType.includes('octet-stream')) {
+      return imageUrl
+    }
+
+    // Kiểm tra Content-Length trước khi download để tránh OOM với ảnh cực lớn
+    const MAX_COVER_SIZE = 5 * 1024 * 1024 // 5MB
+    const contentLength = parseInt(res.headers.get('content-length') ?? '0', 10)
+    if (contentLength > MAX_COVER_SIZE) {
+      console.warn(`[Cover] ⚠️ Cover too large (${contentLength} bytes > 5MB). Storing external URL.`)
       return imageUrl
     }
 
@@ -861,19 +868,21 @@ export async function downloadAndSaveCover(imageUrl: string, storyUrl?: string):
     const { join } = await import('path')
     const { randomUUID } = await import('crypto')
 
-    const filename = `${randomUUID()}.${ext}`
-    const uploadDir = join(process.cwd(), 'public', 'uploads')
-    await mkdir(uploadDir, { recursive: true })
-
     const bytes = await res.arrayBuffer()
-    if (bytes.byteLength < 100) return imageUrl  // fallback to external URL
+    if (bytes.byteLength < 100) return imageUrl        // quá nhỏ — fallback
+    if (bytes.byteLength > MAX_COVER_SIZE) return imageUrl  // vượt 5MB — fallback
+
+    // Lưu vào uploads/covers/ — tách biệt với admin assets (uploads/assets/)
+    const filename = `${randomUUID()}.${ext}`
+    const uploadDir = join(process.cwd(), 'public', 'uploads', 'covers')
+    await mkdir(uploadDir, { recursive: true })
 
     await writeFile(join(uploadDir, filename), Buffer.from(bytes))
     console.log(`[Cover] ✅ Saved ${filename} (${bytes.byteLength} bytes)`)
-    return `/uploads/${filename}`
+    return `/uploads/covers/${filename}`
 
   } catch (e: any) {
     console.warn(`[Cover] ⚠️ Error downloading cover: ${e?.message}. Storing external URL.`)
-    return imageUrl  // fallback: store original URL
+    return imageUrl
   }
 }
