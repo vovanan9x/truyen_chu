@@ -460,65 +460,6 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
       // Collect only chapters belonging to THIS story (prevents sidebar/recommended links pollution)
       const storySlug = new URL(storyUrl).pathname.replace(/^\//, '').split('/')[0]
 
-      /**
-       * Extract chapter number from URL or title — used for ALL rawChaps paths.
-       * Priority:
-       *  1. Title prefix  "123: Tiêu đề" or "123. Tiêu đề"
-       *  2. URL segment   chuong-123, chapter-123, chap-123
-       *  3. Number adjacent to chapter keyword in title
-       *  4. First number in title
-       */
-      function extractNumFromEntry(title: string, chUrl: string): number | null {
-        // 1. Title prefix
-        const pre = title.match(/^(\d+)\s*[:：.]/)
-        if (pre) return parseInt(pre[1])
-        // 2. URL
-        const urlN = chUrl.match(/(?:chuong|chapter|chap|tap|ep)[_-](\d+)/i)
-        if (urlN) return parseInt(urlN[1])
-        // 3. Adjacent to keyword
-        const kwPat = /ch[uư][oô]ng|chapter|chap|t[aậ]p|tap|ep|h[oồ]i|đệ/gi
-        const allNums = Array.from(title.matchAll(/(\d+)/g))
-        if (allNums.length === 1) return parseInt(allNums[0][1])
-        if (allNums.length > 1) {
-          let best: number | null = null; let bestDist = Infinity
-          for (const kw of Array.from(title.matchAll(kwPat))) {
-            const kwEnd = kw.index! + kw[0].length
-            for (const nm of allNums) {
-              const dist = Math.abs(nm.index! - kwEnd)
-              if (dist < bestDist) { bestDist = dist; best = parseInt(nm[1]) }
-            }
-          }
-          if (best !== null) return best
-          return parseInt(allNums[0][1])
-        }
-        return null
-      }
-
-      /**
-       * Assign chapter numbers to a flat rawChaps list.
-       * Chapters that have an extractable number get their real number.
-       * Chapters without any number → placed sequentially AFTER the last numbered chapter.
-       * Deduplicates by num (last-write wins when conflict).
-       */
-      function assignChapterNums(rawChaps: { title: string; chUrl: string }[]): ChapterRef[] {
-        const map = new Map<number, ChapterRef>()
-        const unnumbered: { title: string; chUrl: string }[] = []
-        for (const c of rawChaps) {
-          const n = extractNumFromEntry(c.title, c.chUrl)
-          if (n !== null && n > 0) {
-            // Only add if not already assigned — keeps first occurrence (source order)
-            if (!map.has(n)) map.set(n, { num: n, title: c.title, url: c.chUrl })
-          } else {
-            unnumbered.push(c)
-          }
-        }
-        const numbered = Array.from(map.values()).sort((a, b) => a.num - b.num)
-        const maxNum = numbered.length > 0 ? numbered[numbered.length - 1].num : 0
-        const result: ChapterRef[] = [...numbered]
-        unnumbered.forEach((c, i) => result.push({ num: maxNum + i + 1, title: c.title, url: c.chUrl }))
-        return result
-      }
-
       // Pattern 1: Config-driven AJAX API
       const apiUrlTemplate = cfg.chapterApiUrl
       if (apiUrlTemplate && apiUrlTemplate.includes('{page}')) {
@@ -595,8 +536,8 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
             } catch { break }
           }
           if (rawChaps.length > 0) {
-            // Extract num from URL/title — fallback to sequential index ONLY for truly unnumbered chapters
-            return assignChapterNums(rawChaps)
+            // Assign sequential chapter numbers based on position in source list
+            return rawChaps.map((c, i) => ({ num: i + 1, title: c.title, url: c.chUrl }))
           }
         }
       }
@@ -643,7 +584,7 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
         }
 
         if (rawChaps.length > 0) {
-          return assignChapterNums(rawChaps)
+          return rawChaps.map((c, i) => ({ num: i + 1, title: c.title, url: c.chUrl }))
         }
       }
 
