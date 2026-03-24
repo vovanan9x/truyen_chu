@@ -83,10 +83,13 @@ export default function EditProfilePage() {
   async function uploadAvatar(file: File) {
     setUploading(true)
     const form = new FormData(); form.append('file', file)
-    const res = await fetch('/api/admin/upload', { method: 'POST', body: form })
+    const res = await fetch('/api/user/avatar', { method: 'POST', body: form }) // ✅ đúng endpoint, không cần ADMIN
     if (res.ok) {
       const d = await res.json()
-      setAvatar(d.url); setAvatarPreview(d.url)
+      setAvatar(d.avatarUrl); setAvatarPreview(d.avatarUrl)
+    } else {
+      const d = await res.json().catch(() => ({}))
+      setError(d.error ?? 'Upload ảnh thất bại')
     }
     setUploading(false)
   }
