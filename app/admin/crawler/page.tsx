@@ -1220,6 +1220,79 @@ export default function AdminCrawlerPage() {
                     <StopCircle className="w-4 h-4"/> 🛑 Dừng batch
                   </button>
                 )}
+                {/* Retry failed stories button — shown when batch not running and has failures */}
+                {!batchRunning && batchDone > 0 && Object.values(batchStoryStatus).some(s => s === 'failed') && (
+                  <button onClick={async () => {
+                    // Collect failed story URLs
+                    const failedUrls = batchStories.filter((_, i) => batchStoryStatus[i] === 'failed')
+                    if (!failedUrls.length) return
+                    setBatchStories(failedUrls)
+                    setBatchTotal(failedUrls.length)
+                    setBatchRunning(true); setBatchDone(0)
+                    setBatchLogs([`🔁 Crawl lại ${failedUrls.length} truyện bị lỗi | ${batchParallelStories} song song`])
+                    setBatchErrorCount(0); setBatchStoryStatus({}); batchStopRef.current = false
+
+                    async function crawlOneRetry(storyUrl: string, idx: number) {
+                      const slug = storyUrl.split('/').pop() || storyUrl
+                      setBatchStoryStatus(p => ({ ...p, [idx]: 'running' }))
+                      setBatchLogs(p => [...p, `[${idx + 1}/${failedUrls.length}] 🔄 ${slug}`])
+                      try {
+                        const res = await fetch('/api/admin/crawl/start', {
+                          method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ url: storyUrl, fromChapter: batchFromChapter, toChapter: 9999, batchDelay: 400, overwrite: false, concurrency: batchChapterConcurrency })
+                        })
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+                        const { jobId } = await res.json()
+                        let done = false, attempts = 0
+                        while (!done && attempts < 600) {
+                          await new Promise(r => setTimeout(r, 3000))
+                          let st: Response
+                          try { st = await fetch(`/api/admin/crawl/status/${jobId}`) } catch { attempts++; continue }
+                          if (st.status === 404) { setBatchLogs(p => [...p, `  ✅ ${slug}: hoàn thành`]); done = true; break }
+                          if (st.ok) {
+                            const d = await st.json()
+                            if (d.status === 'completed' || d.status === 'failed') {
+                              const chCount = d.importedChapters || 0
+                              const failCount = Array.isArray(d.failedChapters) ? d.failedChapters.length : 0
+                              setBatchLogs(p => [...p, failCount > 0 ? `  ⚠️ ${slug}: ${chCount} ch. | ❌ ${failCount} lỗi` : `  ✅ ${slug}: ${chCount} ch.`])
+                              if (failCount > 0) setBatchErrorCount(n => n + failCount)
+                              done = true
+                            }
+                          }
+                          attempts++
+                        }
+                        if (!done) setBatchLogs(p => [...p, `  ⏳ ${slug}: timeout`])
+                        setBatchStoryStatus(p => ({ ...p, [idx]: 'done' }))
+                      } catch (e: any) {
+                        setBatchLogs(p => [...p, `  ❌ ${slug}: ${e.message}`])
+                        setBatchStoryStatus(p => ({ ...p, [idx]: 'failed' }))
+                        setBatchErrorCount(n => n + 1)
+                      }
+                      setBatchDone(p => p + 1)
+                    }
+
+                    let rIdx = 0
+                    const rWorkers: Promise<void>[] = []
+                    const runRetryWorker = async () => {
+                      while (rIdx < failedUrls.length) {
+                        if (batchStopRef.current) break
+                        const i = rIdx++
+                        await crawlOneRetry(failedUrls[i], i)
+                        if (!batchStopRef.current && batchDelaySec > 0 && rIdx < failedUrls.length)
+                          await new Promise(r => setTimeout(r, batchDelaySec * 1000))
+                      }
+                    }
+                    for (let w = 0; w < batchParallelStories; w++) rWorkers.push(runRetryWorker())
+                    await Promise.allSettled(rWorkers)
+
+                    setBatchLogs(p => [...p, `🎉 Xong retry! ${batchDone}/${failedUrls.length} truyện`])
+                    setBatchRunning(false); fetchHistory()
+                  }}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-700 text-sm font-semibold border border-amber-200 transition-colors">
+                    <RefreshCw className="w-4 h-4"/>
+                    🔁 Crawl lại {Object.values(batchStoryStatus).filter(s => s === 'failed').length} truyện lỗi
+                  </button>
+                )}
               </div>
 
               {/* Progress bar */}

@@ -7,13 +7,29 @@ import * as cheerio from 'cheerio'
 import { getCrawlSettings } from './crawl-settings'
 import { fetchUrlWithPlaywright, invalidateBypassContext, hasActiveContext, getNextProxyUrl } from './playwright-bypass'
 
-const FETCH_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-  'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.7',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache',
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+]
+
+function getRandomHeaders(cookies?: string) {
+  const ua = USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)]
+  return {
+    'User-Agent': ua,
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'vi-VN,vi;q=0.9,en;q=0.7',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    ...(cookies ? { 'Cookie': cookies } : {}),
+  }
 }
+
 
 // ─── Proxy Agent Pool (undici, built into Node.js 18+) ────────────────────────
 // Supports multiple proxies via round-robin.
@@ -94,10 +110,7 @@ export interface SiteAdapter {
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 
 export async function fetchUrl(url: string, timeout = 15000, cookies?: string, stickyProxyUrl?: string): Promise<string> {
-  const headers = {
-    ...FETCH_HEADERS,
-    ...(cookies ? { 'Cookie': cookies } : {}),
-  }
+  const headers = getRandomHeaders(cookies)
 
   // Helper: do 1 fetch attempt (with optional proxy)
   async function doFetch(extraCookies?: string): Promise<Response> {
@@ -479,11 +492,10 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
             const fullUrl = apiUrl.startsWith('http') ? apiUrl : origin + apiUrl
             try {
               const _ajaxHeaders = {
-                  'User-Agent': FETCH_HEADERS['User-Agent'],
+                  ...getRandomHeaders(cookies),
                   'Accept': 'application/json, text/html, */*',
                   'X-Requested-With': 'XMLHttpRequest',
                   'Referer': storyUrl,
-                  ...(cookies ? { 'Cookie': cookies } : {}),
                 }
               const _ajaxProxy = await getProxyAgent()
               const _ajaxFetch = _ajaxProxy
