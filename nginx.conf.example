@@ -8,7 +8,8 @@
 # Symlink:  ln -s /etc/nginx/sites-available/truyen-chu /etc/nginx/sites-enabled/
 
 # Rate limiting zones (dùng CF-Connecting-IP thay vì $binary_remote_addr)
-limit_req_zone $http_cf_connecting_ip zone=api:10m rate=30r/m;
+# FIX: 30r/m → 2r/s (120/min) — tránh 429 khi admin dùng nhiều API cùng lúc
+limit_req_zone $http_cf_connecting_ip zone=api:10m rate=2r/s;
 limit_req_zone $http_cf_connecting_ip zone=web:10m rate=60r/s;
 
 # Upstream Next.js
@@ -26,6 +27,7 @@ server {
     gzip_vary on;
     gzip_proxied any;
     gzip_comp_level 6;
+    gzip_min_length 1024;  # FIX: bỏ qua file < 1KB, tiết kiệm CPU
     gzip_types
         text/plain text/css text/xml text/javascript
         application/json application/javascript application/xml
@@ -54,22 +56,22 @@ server {
     set_real_ip_from 2400:cb00::/32;
     real_ip_header CF-Connecting-IP;
 
-    # ── Static files từ .next/static ─────────────────────────────────────────
+    # ── Static files từ .next/static — serve trực tiếp từ filesystem ──────────
+    # FIX: dùng alias thay vì proxy → bỏ qua Next.js, giảm tải server
+    # Đổi path thành đường dẫn thực tế trên VPS
     location /_next/static/ {
-        proxy_pass http://nextjs;
+        alias /var/www/truyen_chu/.next/static/;
         expires 365d;
         add_header Cache-Control "public, max-age=31536000, immutable";
         access_log off;
     }
 
     # ── Uploads (ảnh bìa crawl về) — serve trực tiếp, KHÔNG qua Next.js ───────
-    # Đổi path bên dưới thành đường dẫn thực tế trên VPS
     location /uploads/ {
         alias /var/www/truyen_chu/public/uploads/;
         expires 30d;
         add_header Cache-Control "public, max-age=2592000";
         access_log off;
-        # Trả 404 nếu file không tồn tại (thay vì fallback về Next.js)
         try_files $uri =404;
     }
 
@@ -78,25 +80,14 @@ server {
         proxy_pass http://nextjs;
         expires 7d;
         add_header Cache-Control "public, max-age=604800";
+        access_log off;
     }
 
-    # ── API Routes — rate limit chặt hơn ─────────────────────────────────────
-    location /api/ {
-        limit_req zone=api burst=20 nodelay;
-        proxy_pass http://nextjs;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $http_cf_connecting_ip;
-        proxy_set_header X-Forwarded-For $http_cf_connecting_ip;
-        proxy_set_header X-Forwarded-Proto https; # Báo Next.js đây là HTTPS request
-        proxy_cache_bypass $http_upgrade;
-        proxy_read_timeout 60s;
-    }
-
-    # ── SSE (Server-Sent Events) — tắt buffering ─────────────────────────────
+    # ── SSE (Server-Sent Events) — tắt buffering — PHẢI đặt trước /api/ ──────
     location /api/notifications/stream {
         proxy_pass http://nextjs;
         proxy_http_version 1.1;
+        proxy_set_header Host $host;          # FIX: bổ sung Host header còn thiếu
         proxy_set_header Connection '';
         proxy_buffering off;
         proxy_cache off;
@@ -105,6 +96,19 @@ server {
         proxy_set_header X-Forwarded-For $http_cf_connecting_ip;
         proxy_set_header X-Forwarded-Proto https;
         chunked_transfer_encoding on;
+    }
+
+    # ── API Routes — rate limit chặt hơn ─────────────────────────────────────
+    location /api/ {
+        limit_req zone=api burst=30 nodelay;
+        proxy_pass http://nextjs;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $http_cf_connecting_ip;
+        proxy_set_header X-Forwarded-For $http_cf_connecting_ip;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_cache_bypass $http_upgrade;
+        proxy_read_timeout 120s;   # FIX: 60→120s cho các API nặng (crawl job)
     }
 
     # ── Tất cả routes còn lại → Next.js ──────────────────────────────────────
