@@ -7,13 +7,14 @@ const schema = z.object({
   title: z.string().min(1),
   slug: z.string().min(1).regex(/^[a-z0-9-]+$/),
   author: z.string().optional(),
-  coverUrl: z.string().url().optional().or(z.literal('')),
+  coverUrl: z.string().optional(),   // accept relative paths like /uploads/... or full URLs
   description: z.string().optional(),
   status: z.enum(['ONGOING', 'COMPLETED', 'HIATUS']),
   isFeatured: z.boolean(),
-  sourceUrl: z.string().url().optional().or(z.literal('')),
+  sourceUrl: z.string().optional(),  // accept relative paths or full URLs
   sourceName: z.string().optional(),
 })
+
 
 async function isAdmin() {
   const session = await auth()
