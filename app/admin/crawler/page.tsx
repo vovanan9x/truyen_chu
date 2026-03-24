@@ -169,6 +169,10 @@ export default function AdminCrawlerPage() {
   const [batchError, setBatchError] = useState('')
   const [batchStoryStatus, setBatchStoryStatus] = useState<Record<number,'pending'|'running'|'done'|'failed'>>({})
   const [batchErrorCount, setBatchErrorCount] = useState(0)
+  // URLs user muốn bỏ qua khi batch crawl
+  const [skippedUrls, setSkippedUrls] = useState<Set<string>>(new Set())
+  // URLs đã tồn tại trong DB (phát hiện sau khi quét danh sách)
+  const [existingUrls, setExistingUrls] = useState<Set<string>>(new Set())
   const [autoDetecting, setAutoDetecting] = useState(false)
   const [detectPreview, setDetectPreview] = useState<Record<string,string>|null>(null)
   const [detectError, setDetectError] = useState('')
@@ -1190,7 +1194,30 @@ export default function AdminCrawlerPage() {
                     })
                     const data=await res.json()
                     if(!res.ok) setBatchError(data.error||'Lỗi không xác định')
-                    else { setBatchStories(data.storyUrls||[]); setBatchTotal(data.total) }
+                    else { 
+                      const urls: string[] = data.storyUrls || []
+                      setBatchStories(urls)
+                      setBatchTotal(data.total)
+                      // Reset skip state mỗi lần quét mới
+                      setSkippedUrls(new Set())
+                      setExistingUrls(new Set())
+                      // Tự động check URL nào đã có trong DB
+                      if (urls.length > 0) {
+                        try {
+                          const chkRes = await fetch('/api/admin/crawl/check-existing', {
+                            method: 'POST', headers: {'Content-Type':'application/json'},
+                            body: JSON.stringify({ urls })
+                          })
+                          if (chkRes.ok) {
+                            const chkData = await chkRes.json()
+                            const existing = new Set<string>(chkData.existingUrls || [])
+                            setExistingUrls(existing)
+                            // Auto-skip các truyện đã có — user có thể bỏ skip lại
+                            setSkippedUrls(new Set(existing))
+                          }
+                        } catch { /* nếu lỗi thì không skip gì */ }
+                      }
+                    }
                   } catch(e:any){setBatchError(e.message)} finally{setBatchFetching(false)}
                 }} disabled={!batchCategoryUrl||batchFetching||batchRunning}
                   className="flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 disabled:opacity-50">
@@ -1246,7 +1273,9 @@ export default function AdminCrawlerPage() {
               {/* Header row */}
               <div className="flex items-center justify-between flex-wrap gap-3">
                 <div className="flex items-center gap-3">
-                  <span className="text-sm font-semibold">Tìm thấy <span className="text-primary">{batchStories.length}</span> truyện</span>
+                  <span className="text-sm font-semibold">Tìm thấy <span className="text-primary">{batchStories.length}</span> truyện
+                    {skippedUrls.size > 0 && <span className="text-muted-foreground font-normal"> · bỏ qua {skippedUrls.size}</span>}
+                  </span>
                   {batchRunning&&<span className="text-xs text-muted-foreground">({batchParallelStories} truyện song song · {batchChapterConcurrency} chương/truyện)</span>}
                   {batchErrorCount>0&&(
                     <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-destructive/10 text-destructive text-xs font-medium">
@@ -1262,6 +1291,13 @@ export default function AdminCrawlerPage() {
                   // Helper: crawl 1 story and wait for completion
                   async function crawlOneStory(storyUrl: string, idx: number) {
                     const slug = storyUrl.split('/').pop() || storyUrl
+                    // Bỏ qua nếu user đã đánh dấu skip
+                    if (skippedUrls.has(storyUrl)) {
+                      setBatchStoryStatus(p=>({...p,[idx]:'done'}))
+                      setBatchLogs(p=>[...p,`[${idx+1}/${batchStories.length}] ⏭️ Bỏ qua: ${slug}`])
+                      localDone++; setBatchDone(p=>p+1)
+                      return
+                    }
                     setBatchStoryStatus(p=>({...p,[idx]:'running'}))
                     setBatchLogs(p=>[...p,`[${idx+1}/${batchStories.length}] 🔄 ${slug}`])
                     try {
@@ -1328,7 +1364,10 @@ export default function AdminCrawlerPage() {
                 }} disabled={batchRunning}
                   className="flex items-center gap-2 px-5 py-2 rounded-xl gradient-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
                   {batchRunning?<Loader2 className="w-4 h-4 animate-spin"/>:<Globe className="w-4 h-4"/>}
-                  {batchRunning?`Đang crawl ${batchDone}/${batchStories.length}...`:`Bắt đầu crawl ${batchStories.length} truyện`}
+                  {batchRunning
+                    ?`Đang crawl ${batchDone}/${batchStories.length - skippedUrls.size}...`
+                    :`Bắt đầu crawl ${batchStories.length - skippedUrls.size} truyện${ skippedUrls.size > 0 ? ` (bỏ ${skippedUrls.size})` : ''}`
+                  }
                 </button>
                 {batchRunning&&(
                   <button
@@ -1449,16 +1488,41 @@ export default function AdminCrawlerPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 max-h-60 overflow-y-auto">
                 {batchStories.map((url,i)=>{
                   const st=batchStoryStatus[i]
+                  const isSkipped = skippedUrls.has(url)
+                  const isExisting = existingUrls.has(url)
                   return(
                     <div key={url} className={`flex items-center gap-2 text-xs p-2 rounded-lg transition-colors ${
-                      st==='running'?'bg-blue-500/10 border border-blue-500/20'
+                      isSkipped?'bg-muted/20 opacity-50'
+                      :st==='running'?'bg-blue-500/10 border border-blue-500/20'
                       :st==='done'?'bg-green-500/10'
                       :st==='failed'?'bg-red-500/10'
                       :'bg-muted/30'
                     }`}>
                       <span className="text-muted-foreground w-6 text-right flex-shrink-0">{i+1}.</span>
-                      <span className="font-mono truncate">{url.split('/').pop()}</span>
-                      <span className="ml-auto flex-shrink-0">
+                      <span className={`font-mono truncate flex-1 ${isSkipped?'line-through':''}`}>{url.split('/').pop()}</span>
+                      {isExisting && !isSkipped && (
+                        <span className="flex-shrink-0 px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-600 text-[10px] font-medium">Đã có</span>
+                      )}
+                      {isSkipped && (
+                        <span className="flex-shrink-0 px-1.5 py-0.5 rounded bg-muted text-muted-foreground text-[10px]">Bỏ qua</span>
+                      )}
+                      <button
+                        onClick={()=>setSkippedUrls(prev=>{
+                          const next=new Set(prev)
+                          isSkipped?next.delete(url):next.add(url)
+                          return next
+                        })}
+                        disabled={batchRunning}
+                        title={isSkipped?'Huỷ bỏ qua':'Bỏ qua truyện này'}
+                        className={`flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors disabled:pointer-events-none ${
+                          isSkipped
+                            ?'bg-primary/10 text-primary hover:bg-primary/20'
+                            :'bg-muted hover:bg-red-100 hover:text-red-600 text-muted-foreground'
+                        }`}
+                      >
+                        {isSkipped?'Khôi phục':'Bỏ qua'}
+                      </button>
+                      <span className="ml-0.5 flex-shrink-0">
                         {st==='running'&&<Loader2 className="w-3 h-3 text-blue-500 animate-spin"/>}
                         {st==='done'&&<CheckCircle2 className="w-3 h-3 text-green-500"/>}
                         {st==='failed'&&<XCircle className="w-3 h-3 text-red-500"/>}
