@@ -214,7 +214,7 @@ export default function AdminCrawlerPage() {
       if (data.importedChapters !== lastImported) {
         lastImported = data.importedChapters
         lastUpdated = Date.now()
-      } else if (Date.now() - lastUpdated > 30000 && data.status === 'running') {
+      } else if (Date.now() - lastUpdated > 180000 && data.status === 'running') {
         // Stale — mark as likely completed
         setActiveJob({ ...data, status: 'completed' })
         clearInterval(pollRef.current!)
@@ -1140,6 +1140,7 @@ export default function AdminCrawlerPage() {
                 <button onClick={async()=>{
                   setBatchRunning(true);setBatchDone(0);setBatchLogs([`🚀 Bắt đầu batch crawl ${batchStories.length} truyện | ${batchParallelStories} song song | ${batchChapterConcurrency} chương/truyện`])
                   setBatchErrorCount(0);setBatchStoryStatus({});batchStopRef.current=false
+                  let localDone = 0 // local counter — avoids stale React state closure
 
                   // Helper: crawl 1 story and wait for completion
                   async function crawlOneStory(storyUrl: string, idx: number) {
@@ -1181,7 +1182,7 @@ export default function AdminCrawlerPage() {
                       setBatchStoryStatus(p=>({...p,[idx]:'failed'}))
                       setBatchErrorCount(n=>n+1)
                     }
-                    setBatchDone(p=>p+1)
+                    localDone++; setBatchDone(p=>p+1)
                   }
 
                   // Sliding window — ngay khi 1 truyện xong, bắt đầu truyện tiếp theo
@@ -1202,7 +1203,7 @@ export default function AdminCrawlerPage() {
                   for (let w = 0; w < batchParallelStories; w++) workers.push(runWorker())
                   await Promise.allSettled(workers)
 
-                  setBatchLogs(p=>[...p,`🎉 Xong! ${batchDone}/${batchStories.length} truyện đã xử lý`])
+                  setBatchLogs(p=>[...p,`🎉 Xong! ${localDone}/${batchStories.length} truyện đã xử lý`])
                   setBatchRunning(false)
                   fetchHistory()
                 }} disabled={batchRunning}

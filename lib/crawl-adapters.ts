@@ -110,11 +110,9 @@ export interface SiteAdapter {
 // ─── Fetch helper ─────────────────────────────────────────────────────────────
 
 export async function fetchUrl(url: string, timeout = 15000, cookies?: string, stickyProxyUrl?: string): Promise<string> {
-  const headers = getRandomHeaders(cookies)
-
-  // Helper: do 1 fetch attempt (with optional proxy)
+  // Helper: do 1 fetch attempt — re-generates headers each call to randomize User-Agent
   async function doFetch(extraCookies?: string): Promise<Response> {
-    const h = extraCookies ? { ...headers, 'Cookie': extraCookies } : headers
+    const h = getRandomHeaders(extraCookies ?? cookies)
     const proxyAgent = await getProxyAgent(stickyProxyUrl)
     if (proxyAgent) {
       const { fetch: undiciFetch } = await import('undici')
