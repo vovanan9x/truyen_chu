@@ -2,7 +2,6 @@ import { Metadata } from 'next'
 import Image from 'next/image'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { unstable_noStore as noStore } from 'next/cache'
 import { BookOpen, Eye, CheckCircle, Clock, AlertCircle, Lock } from 'lucide-react'
 import { prisma } from '@/lib/prisma'
 import { getSiteSettings, isAdEnabled, getAdCode } from '@/lib/site-settings'
@@ -17,11 +16,19 @@ import ExpandableDescription from '@/components/story/ExpandableDescription'
 import AdBanner from '@/components/ads/AdBanner'
 import ViewTracker from '@/components/story/ViewTracker'
 
-export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
-  const story = await prisma.story.findUnique({
-    where: { slug: params.slug },
-    select: { title: true, author: true, description: true, coverUrl: true, slug: true, _count: { select: { chapters: true } } }
+// Single reusable query for story lookup — avoids double DB hit between generateMetadata and page
+async function getStoryBySlug(slug: string) {
+  return prisma.story.findUnique({
+    where: { slug },
+    include: {
+      genres: { include: { genre: true } },
+      _count: { select: { chapters: true } },
+    },
   })
+}
+
+export async function generateMetadata({ params }: { params: { slug: string } }): Promise<Metadata> {
+  const story = await getStoryBySlug(params.slug)
   if (!story) return { title: 'Không tìm thấy truyện' }
   const { buildStoryMeta } = await import('@/lib/seo')
   const meta = await buildStoryMeta({ ...story, author: story.author ?? '' }, story._count.chapters)
@@ -56,23 +63,20 @@ export default async function StoryDetailPage({
   params: { slug: string }
   searchParams: { page?: string }
 }) {
-  noStore()  // Always fetch fresh data — no static caching for story page
-  const story = await prisma.story.findUnique({
-    where: { slug: params.slug },
-    include: {
-      genres: { include: { genre: true } },
-      _count: { select: { chapters: true } },
-    },
-  })
+  // force-dynamic (module-level) already disables caching — noStore() not needed
+  const story = await getStoryBySlug(params.slug)
 
   if (!story) notFound()
 
   const totalChapterPages = Math.ceil(story._count.chapters / CHAPTERS_PER_PAGE)
-  const page = Math.max(1, parseInt(searchParams.page ?? '1', 10))
+  const page = Math.max(1, Math.min(parseInt(searchParams.page ?? '1', 10), totalChapterPages || 1))
   const [chapters, comments, siteSettings] = await Promise.all([
     prisma.chapter.findMany({
       where: { storyId: story.id },
       orderBy: { chapterNum: 'asc' },
+      // ✅ Paginated — only load CHAPTERS_PER_PAGE (50) at a time
+      take: CHAPTERS_PER_PAGE,
+      skip: (page - 1) * CHAPTERS_PER_PAGE,
       select: { id: true, chapterNum: true, title: true, isLocked: true, publishedAt: true },
     }),
     prisma.comment.findMany({

@@ -6,7 +6,6 @@ import FeaturedCarousel from '@/components/story/FeaturedCarousel'
 import StoryGrid from '@/components/story/StoryGrid'
 import { StoryCardData } from '@/components/story/StoryCard'
 import { buildHomeMeta } from '@/lib/seo'
-import { unstable_noStore as noStore } from 'next/cache'
 
 // Luôn fetch dữ liệu mới nhất — không cache trang chủ (cần thấy truyện/chương mới ngay sau khi crawl)
 export const dynamic = 'force-dynamic'
@@ -85,7 +84,7 @@ function mapStory(s: Awaited<ReturnType<typeof getRecentlyUpdated>>[number]): St
 }
 
 export default async function HomePage() {
-  noStore()
+  // force-dynamic already opts out of static caching
   const [featured, recent, popular, genres] = await Promise.all([
     getFeaturedStories(),
     getRecentlyUpdated(),
