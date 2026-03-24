@@ -389,6 +389,9 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
       }
 
       const sel = cfg.chapterListSel || 'a[href*="chuong"], a[href*="chapter"], a[href*="chap"], a[href*="tap"]'
+      const numbered: ChapterRef[] = []
+      const unnumbered: { text: string; chUrl: string }[] = []
+
       $(sel).each((_, el) => {
         const $a = $(el).is('a') ? $(el) : $(el).find('a').first()
         if (!$a.length) return
@@ -396,13 +399,26 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
         if (!href || href.startsWith('#') || href.startsWith('javascript')) return
         const text = $a.attr('title') || $a.text().trim()
         const num = extractChapNum(text, href)
-        if (num !== null && num > 0 && href) {
-          const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : new URL(href, url).toString()
-          if (!chapters.find(c => c.num === num)) {
-            chapters.push({ num, title: text || `Chương ${num}`, url: chUrl })
+        const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : new URL(href, url).toString()
+
+        if (num !== null && num > 0) {
+          if (!numbered.find(c => c.num === num)) {
+            numbered.push({ num, title: text || `Chương ${num}`, url: chUrl })
+          }
+        } else if (href) {
+          // Chương không có số (thông báo, ngoại truyện...) — thu thập riêng
+          if (!unnumbered.find(u => u.chUrl === chUrl)) {
+            unnumbered.push({ text: text || href, chUrl })
           }
         }
       })
+
+      // Gán số tuần tự cho chương không có số (đặt sau chương cuối có số)
+      const maxNum = numbered.reduce((m, c) => Math.max(m, c.num), 0)
+      unnumbered.forEach((u, i) => {
+        chapters.push({ num: maxNum + i + 1, title: u.text, url: u.chUrl })
+      })
+      numbered.forEach(c => chapters.push(c))
 
       // Next page: use configured selector, or fall back to common patterns
       let nextPageUrl: string | undefined
