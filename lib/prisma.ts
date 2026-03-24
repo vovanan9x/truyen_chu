@@ -11,8 +11,8 @@ function buildDatasourceUrl() {
   if (!base) return base
   try {
     const url = new URL(base)
-    url.searchParams.set('connection_limit', '20')
-    url.searchParams.set('pool_timeout', '10')
+    url.searchParams.set('connection_limit', '30')
+    url.searchParams.set('pool_timeout', '15')
     return url.toString()
   } catch {
     return base

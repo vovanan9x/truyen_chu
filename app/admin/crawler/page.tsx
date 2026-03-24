@@ -315,18 +315,19 @@ export default function AdminCrawlerPage() {
     setProxyLoading(true)
     try {
       const res = await fetch('/api/admin/settings')
-      if (res.ok) {
-        const d = await res.json()
-        // Load proxy list (new format)
-        let list = d.crawl_proxy_list ?? ''
-        // Backward compat: build from old single proxy fields
-        if (!list && d.crawl_proxy_host) {
-          const { crawl_proxy_host: h, crawl_proxy_port: p, crawl_proxy_user: u, crawl_proxy_pass: pw } = d
-          list = (u && pw) ? `http://${u}:${pw}@${h}:${p || 10000}` : `http://${h}:${p || 10000}`
-        }
-        setProxyList(list)
-        setUsePlaywright(d.crawl_use_playwright === '1')
+      if (!res.ok) return // ✅ Giữ nguyên data cũ nếu API fail — không xóa trắng
+      const d = await res.json()
+      // Load proxy list (new format)
+      let list = d.crawl_proxy_list ?? ''
+      // Backward compat: build from old single proxy fields
+      if (!list && d.crawl_proxy_host) {
+        const { crawl_proxy_host: h, crawl_proxy_port: p, crawl_proxy_user: u, crawl_proxy_pass: pw } = d
+        list = (u && pw) ? `http://${u}:${pw}@${h}:${p || 10000}` : `http://${h}:${p || 10000}`
       }
+      setProxyList(list)
+      setUsePlaywright(d.crawl_use_playwright === '1')
+    } catch {
+      // Lỗi network/DB — giữ nguyên state cũ, không clear textarea
     } finally { setProxyLoading(false) }
   }
 
