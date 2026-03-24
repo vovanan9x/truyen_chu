@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
-import { requireAdmin } from '@/lib/auth-utils'
 
 // POST /api/admin/crawl/check-existing
 // Body: { urls: string[] }
 // Returns: { existingUrls: string[] } — subset of input URLs that already have a crawlSchedule or story with that sourceUrl
 export async function POST(req: NextRequest) {
-  const authError = await requireAdmin(req)
-  if (authError) return authError
+  const session = await auth()
+  if (!session || session.user.role !== 'ADMIN') return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
 
   const { urls } = await req.json() as { urls: string[] }
   if (!Array.isArray(urls) || urls.length === 0) {
