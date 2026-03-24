@@ -1,14 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 
-// Lightweight chapter list — only returns fields needed for the chapter list accordion
-// Typical size: 200 chapters × ~80 bytes = ~16KB — safe to load client-side
+// GET /api/stories/[storyId]/chapters
+// NOTE: despite the param name, [storyId] here receives the story SLUG
+// (same dynamic segment as the [storyId]/view route).
+// This endpoint accepts both slug and DB id for flexibility.
 export async function GET(
   _req: NextRequest,
-  { params }: { params: { slug: string } }
+  { params }: { params: { storyId: string } }
 ) {
-  const story = await prisma.story.findUnique({
-    where: { slug: params.slug },
+  const { storyId } = params
+
+  // Try lookup by slug first, fall back to DB id
+  const story = await prisma.story.findFirst({
+    where: {
+      OR: [{ slug: storyId }, { id: storyId }],
+    },
     select: { id: true },
   })
   if (!story) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -20,10 +27,14 @@ export async function GET(
   })
 
   return NextResponse.json(
-    { chapters: chapters.map(ch => ({ ...ch, publishedAt: ch.publishedAt?.toISOString() ?? null })) },
+    {
+      chapters: chapters.map(ch => ({
+        ...ch,
+        publishedAt: ch.publishedAt?.toISOString() ?? null,
+      })),
+    },
     {
       headers: {
-        // Cache 60s on CDN — new chapters will be reflected within 1 min
         'Cache-Control': 'public, s-maxage=60, stale-while-revalidate=120',
       },
     }
