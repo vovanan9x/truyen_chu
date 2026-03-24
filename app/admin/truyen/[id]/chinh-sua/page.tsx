@@ -85,12 +85,12 @@ export default function EditStoryPage({ params }: { params: { id: string } }) {
             </select></div>
         </div>
         <div><label className="text-sm font-medium block mb-1.5">URL ảnh bìa</label>
-          <input name="coverUrl" type="url" defaultValue={story?.coverUrl ?? ''} className={inputCls} /></div>
+          <input name="coverUrl" type="text" defaultValue={story?.coverUrl ?? ''} placeholder="/uploads/covers/... hoặc https://..." className={inputCls} /></div>
         <div><label className="text-sm font-medium block mb-1.5">Giới thiệu</label>
           <textarea name="description" rows={5} defaultValue={story?.description ?? ''} className={inputCls + ' resize-none'} /></div>
         <div className="grid grid-cols-2 gap-4">
           <div><label className="text-sm font-medium block mb-1.5">Nguồn URL</label>
-            <input name="sourceUrl" type="url" defaultValue={story?.sourceUrl ?? ''} className={inputCls} /></div>
+          <input name="sourceUrl" type="text" defaultValue={story?.sourceUrl ?? ''} className={inputCls} /></div>
           <div><label className="text-sm font-medium block mb-1.5">Tên nguồn</label>
             <input name="sourceName" defaultValue={story?.sourceName ?? ''} className={inputCls} /></div>
         </div>
