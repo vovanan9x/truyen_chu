@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { domain, name, titleSelector, authorSelector, coverSelector, descSelector,
-      genreSelector, chapterListSel, chapterContentSel, chapterTitleSel, chapterTitleRegex,
+      genreSelector, chapterListSel, storyListSel, chapterContentSel, chapterTitleSel, chapterTitleRegex,
       nextPageSel, chapterApiUrl, storyIdPattern, chapterApiJson,
       cookies, notes, isActive } = body
 
@@ -35,6 +35,7 @@ export async function POST(req: NextRequest) {
       descSelector: descSelector || null,
       genreSelector: genreSelector || null,
       chapterListSel: chapterListSel || null,
+      storyListSel: storyListSel || null,
       chapterContentSel: chapterContentSel || null,
       chapterTitleSel: chapterTitleSel || null,
       chapterTitleRegex: chapterTitleRegex || null,
@@ -66,7 +67,7 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const { id, domain, name, titleSelector, authorSelector, coverSelector, descSelector,
-      genreSelector, chapterListSel, chapterContentSel, chapterTitleSel, chapterTitleRegex,
+      genreSelector, chapterListSel, storyListSel, chapterContentSel, chapterTitleSel, chapterTitleRegex,
       nextPageSel, chapterApiUrl, storyIdPattern, chapterApiJson,
       cookies, notes, isActive } = await req.json()
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
@@ -79,6 +80,7 @@ export async function PATCH(req: NextRequest) {
     if (descSelector !== undefined) data.descSelector = descSelector || null
     if (genreSelector !== undefined) data.genreSelector = genreSelector || null
     if (chapterListSel !== undefined) data.chapterListSel = chapterListSel || null
+    if (storyListSel !== undefined) data.storyListSel = storyListSel || null
     if (chapterContentSel !== undefined) data.chapterContentSel = chapterContentSel || null
     if (chapterTitleSel !== undefined) data.chapterTitleSel = chapterTitleSel || null
     if (chapterTitleRegex !== undefined) data.chapterTitleRegex = chapterTitleRegex || null
