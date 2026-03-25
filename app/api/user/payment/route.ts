@@ -3,11 +3,22 @@ import { auth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { z } from 'zod'
 
+// Bảng giá cố định ở server — user không thể tự khai giá
+const COIN_PACKAGES: Record<number, number> = {
+  50:   15000,
+  100:  25000,
+  200:  45000,
+  500:  100000,
+  1000: 180000,
+}
+
 const schema = z.object({
-  packageCoins: z.number().int().positive(),
-  packagePrice: z.number().int().positive(),
+  packageCoins: z.number().int().positive().refine(
+    v => COIN_PACKAGES[v] !== undefined,
+    { message: 'Gói xu không hợp lệ' }
+  ),
   method: z.enum(['bank', 'momo', 'vnpay']),
-  transactionId: z.string().optional(),
+  transactionId: z.string().max(100).optional(),
   note: z.string().max(500).optional(),
 })
 
@@ -31,7 +42,10 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json()
   const result = schema.safeParse(body)
-  if (!result.success) return NextResponse.json({ error: 'Dữ liệu không hợp lệ' }, { status: 400 })
+  if (!result.success) return NextResponse.json({ error: result.error.errors[0].message }, { status: 400 })
+
+  const { packageCoins, method, transactionId, note } = result.data
+  const packagePrice = COIN_PACKAGES[packageCoins] // giá server-side, không tin client
 
   // Check pending limit (max 3 pending at once)
   const pendingCount = await prisma.paymentRequest.count({
@@ -44,11 +58,11 @@ export async function POST(req: NextRequest) {
   const payment = await prisma.paymentRequest.create({
     data: {
       userId: session.user.id,
-      packageCoins: result.data.packageCoins,
-      packagePrice: result.data.packagePrice,
-      method: result.data.method,
-      transactionId: result.data.transactionId || null,
-      note: result.data.note || null,
+      packageCoins,
+      packagePrice, // ← giá từ server, không phải client
+      method,
+      transactionId: transactionId || null,
+      note: note || null,
     },
   })
 

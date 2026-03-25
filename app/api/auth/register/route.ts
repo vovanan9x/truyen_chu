@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
+import { rateLimit } from '@/lib/rate-limit'
 
 const schema = z.object({
   name: z.string().min(2, 'Tên phải có ít nhất 2 ký tự'),
@@ -11,6 +12,13 @@ const schema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    // Rate limit: 5 registrations per 10 minutes per IP
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown'
+    const rl = rateLimit(`register:${ip}`, 5, 10 * 60_000)
+    if (!rl.allowed) {
+      return NextResponse.json({ error: 'Quá nhiều yêu cầu. Vui lòng thử lại sau.' }, { status: 429 })
+    }
+
     const body = await req.json()
     const parsed = schema.safeParse(body)
 

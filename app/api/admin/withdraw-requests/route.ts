@@ -38,8 +38,10 @@ export async function PUT(req: NextRequest) {
   if (!req2) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   if (action === 'processing') {
+    if (req2.status !== 'PENDING') return NextResponse.json({ error: 'Chỉ có thể chuyển sang Đang xử lý khi ở trạng thái Chờ' }, { status: 400 })
     await prisma.withdrawRequest.update({ where: { id }, data: { status: 'PROCESSING', adminNote } })
   } else if (action === 'complete') {
+    if (req2.status !== 'PROCESSING') return NextResponse.json({ error: 'Chỉ có thể hoàn tất khi đang ở trạng thái Xử lý' }, { status: 400 })
     await prisma.$transaction([
       prisma.withdrawRequest.update({ where: { id }, data: { status: 'COMPLETED', adminNote } }),
       prisma.notification.create({
@@ -53,6 +55,7 @@ export async function PUT(req: NextRequest) {
       }),
     ])
   } else if (action === 'reject') {
+    if (['COMPLETED', 'REJECTED'].includes(req2.status)) return NextResponse.json({ error: 'Không thể từ chối yêu cầu đã hoàn tất hoặc đã từ chối' }, { status: 400 })
     // Hoàn xu lại cho user
     await prisma.$transaction([
       prisma.withdrawRequest.update({ where: { id }, data: { status: 'REJECTED', adminNote } }),

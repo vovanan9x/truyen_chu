@@ -45,56 +45,52 @@ export async function POST(req: NextRequest) {
   const minCoins = minSetting ? parseInt(minSetting.value) : 1000
 
   const { coins, method, accountInfo } = parsed.data
-
   if (coins < minCoins) {
     return NextResponse.json({ error: `Tối thiểu ${minCoins} xu để rút` }, { status: 400 })
-  }
-
-  // Kiểm tra số dư
-  const user = await prisma.user.findUnique({ where: { id: session.user.id }, select: { coinBalance: true } })
-  if (!user || user.coinBalance < coins) {
-    return NextResponse.json({ error: 'Số dư xu không đủ' }, { status: 400 })
-  }
-
-  // Có pending request chưa?
-  const existing = await prisma.withdrawRequest.findFirst({
-    where: { userId: session.user.id, status: { in: ['PENDING', 'PROCESSING'] } },
-  })
-  if (existing) {
-    return NextResponse.json({ error: 'Bạn đang có yêu cầu rút xu chưa hoàn tất' }, { status: 400 })
   }
 
   const fee = Math.ceil(coins * 0.05)
   const netCoins = coins - fee
 
-  // Trừ xu ngay lập tức
-  const request = await prisma.$transaction(async tx => {
-    await tx.user.update({
-      where: { id: session.user.id },
-      data: { coinBalance: { decrement: coins } },
-    })
-    await tx.transaction.create({
-      data: {
-        userId: session.user.id,
-        type: 'DEPOSIT',
-        amount: 0,
-        coinAmount: -coins,
-        status: 'SUCCESS',
-        meta: { note: `Rút ${coins} xu (phí ${fee} xu, nhận ${netCoins} xu)` },
-      },
-    })
-    return tx.withdrawRequest.create({
-      data: {
-        userId: session.user.id,
-        coins,
-        fee,
-        netCoins,
-        method,
-        accountInfo: JSON.stringify(accountInfo),
-        status: 'PENDING',
-      },
-    })
-  })
+  try {
+    const request = await prisma.$transaction(async tx => {
+      // Lock user row để tránh race condition
+      const [user] = await tx.$queryRaw<{ id: string; coinBalance: number }[]>`
+        SELECT id, "coinBalance" FROM users WHERE id = ${session.user.id} FOR UPDATE
+      `
+      if (!user) throw new Error('Tài khoản không tồn tại')
+      if (user.coinBalance < coins) throw new Error('Số dư xu không đủ')
 
-  return NextResponse.json({ success: true, request }, { status: 201 })
+      // Kiểm tra pending request bên trong transaction
+      const existingCount = await tx.withdrawRequest.count({
+        where: { userId: session.user.id, status: { in: ['PENDING', 'PROCESSING'] } },
+      })
+      if (existingCount > 0) throw new Error('Bạn đang có yêu cầu rút xu chưa hoàn tất')
+
+      await tx.user.update({
+        where: { id: session.user.id },
+        data: { coinBalance: { decrement: coins } },
+      })
+      await tx.transaction.create({
+        data: {
+          userId: session.user.id,
+          type: 'DEPOSIT',
+          amount: 0,
+          coinAmount: -coins,
+          status: 'SUCCESS',
+          meta: { note: `Rút ${coins} xu (phí ${fee} xu, nhận ${netCoins} xu)` },
+        },
+      })
+      return tx.withdrawRequest.create({
+        data: { userId: session.user.id, coins, fee, netCoins, method,
+          accountInfo: JSON.stringify(accountInfo), status: 'PENDING' },
+      })
+    })
+
+    return NextResponse.json({ success: true, request }, { status: 201 })
+  } catch (err: any) {
+    const msg = err?.message ?? 'Lỗi hệ thống'
+    const isUserError = ['Số dư', 'Tối thiểu', 'chưa hoàn tất', 'không tồn tại'].some(s => msg.includes(s))
+    return NextResponse.json({ error: msg }, { status: isUserError ? 400 : 500 })
+  }
 }
