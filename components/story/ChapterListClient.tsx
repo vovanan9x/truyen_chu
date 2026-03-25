@@ -226,10 +226,10 @@ function ChapterCard({ ch, storySlug }: { ch: Chapter; storySlug: string }) {
         {ch.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 flex-shrink-0"/>}
         <div className="min-w-0">
           <p className="text-sm font-medium group-hover:text-primary transition-colors truncate">
-            {ch.title || `Chương ${ch.chapterNum}`}
+            Chương {ch.chapterNum}
           </p>
           {ch.title && (
-            <p className="text-xs text-muted-foreground">Chương {ch.chapterNum}</p>
+            <p className="text-xs text-muted-foreground truncate">{ch.title}</p>
           )}
         </div>
       </div>
