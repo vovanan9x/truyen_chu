@@ -22,23 +22,22 @@ const EXCLUDE_PATTERNS = [
 
 // Next-page selectors — ordered by specificity (most specific first)
 const NEXT_PAGE_SELECTORS = [
-  // Site-config override (handled separately below)
   'a[rel="next"]',
-  // Bootstrap glyphicon style (truyenfull, metruyenchu etc.)
-  '.pagination li:not(.disabled) a[title*="Trang"]:not([title*="đầu"]):not([title*="cuối"])',
-  'ul.pagination li:last-child:not(.disabled) a',
-  'ul.pagination .next a',
+  // Explicit Next buttons (text or aria)
+  '.pagination a:contains("Trang tiếp")',
+  '.pagination a:contains("Trang sau")',
+  '.pagination a[aria-label*="Next"]',
+  '.pagination a[aria-label*="ext"]', // next
+  // Specific glyphicon or icon classes for Next
+  '.pagination a:has(.glyphicon-menu-right)',
+  '.pagination a:has(i.fa-angle-right)',
+  '.pagination a:has(i.fa-chevron-right)',
   // Generic pagination classes
   '.pagination .next a',
   '.pagination li.next a',
   'li.next a',
   '.pager-next a',
   'a.next-page',
-  // Aria
-  '.pagination a[aria-label*="ext"]',
-  // Common text patterns
-  'a[title*="Trang sau"]',
-  'a[title*="Next"]',
 ]
 
 /**
@@ -69,8 +68,19 @@ function getNextPageFromHtml(
 
   for (const sel of NEXT_PAGE_SELECTORS) {
     try {
+      // For :has() selector which might fail in older cheerio, we wrap in try-catch
+      // But we can also check text manually if needed
       const el = $(sel).first()
-      const href = el.attr('href')
+      let href = el.attr('href')
+      
+      // If we didn't find href using the selector, let's try finding the icon manually
+      if (!href && sel.includes(':has')) {
+        const iconSel = sel.match(/:has\((.*?)\)/)?.[1]
+        if (iconSel) {
+          href = $(iconSel).closest('a').attr('href')
+        }
+      }
+
       if (!href || href === '#' || href.startsWith('javascript')) continue
       const resolved = href.startsWith('http') ? href : new URL(href, currentUrl).toString()
       const u = new URL(resolved)
