@@ -20,9 +20,27 @@ const EXCLUDE_PATTERNS = [
   /\.(jpg|jpeg|png|gif|webp|svg|css|js|ico)$/i,
 ]
 
+// Common next-page selectors used by Vietnamese novel sites
+const NEXT_PAGE_SELECTORS = [
+  'a[rel="next"]',
+  '.pagination .next a',
+  'li.next a',
+  '.pager-next a',
+  'a.next-page',
+  // text-based
+  'a:contains("Trang kế")',
+  'a:contains("Tiếp")',
+  'a:contains("›"):last',
+  'a:contains("»"):last',
+  '.pagination a[aria-label*="ext"]',
+  // truyenfull-specific
+  '.page-link[aria-label="Next"]',
+  'ul.pagination li:last-child a',
+]
+
 /**
  * Scrape story list from a category/listing page.
- * Uses site config's storyListSel if available, falls back to generic link scanning.
+ * Follows actual next-page links from HTML instead of guessing URL patterns.
  */
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -47,16 +65,9 @@ export async function POST(req: NextRequest) {
   const domain = new URL(categoryUrl).hostname.replace(/^www\./, '')
   const siteConfig = await prisma.siteConfig.findUnique({ where: { domain } })
   const storyListSel = (siteConfig as any)?.storyListSel as string | null ?? null
+  const nextPageSel = siteConfig?.nextPageSel || null
 
   const storyUrls: string[] = []
-
-  // Build paginated URL — try common VN novel site patterns
-  function buildPageUrl(base: string, page: number): string {
-    if (page === 1) return base
-    const b = base.replace(/\/$/, '')
-    // Try ?page=N style (metruyenchu) or /trang-N/ style (truyenfull)
-    return b.includes('?') ? `${b}&page=${page}` : `${b}/trang-${page}/`
-  }
 
   function extractStoryUrl(href: string, pageUrl: string): string | null {
     if (!href) return null
@@ -82,11 +93,42 @@ export async function POST(req: NextRequest) {
     return `${origin}/${slug}`
   }
 
-  // Scrape pages
-  for (let page = 1; page <= maxPages && storyUrls.length < maxStories; page++) {
-    const pageUrl = buildPageUrl(categoryUrl, page)
+  function getNextPageUrl($: ReturnType<typeof cheerio.load>, currentUrl: string): string | null {
+    // Try site-configured selector first
+    const selectors = nextPageSel
+      ? [nextPageSel, ...NEXT_PAGE_SELECTORS]
+      : NEXT_PAGE_SELECTORS
+
+    for (const sel of selectors) {
+      try {
+        const el = $(sel).first()
+        const href = el.attr('href')
+        if (!href || href === '#' || href.includes('javascript')) continue
+
+        const resolved = href.startsWith('http') ? href : new URL(href, currentUrl).toString()
+
+        // Must differ from current page and same origin
+        const u = new URL(resolved)
+        if (u.origin !== origin) continue
+        if (resolved === currentUrl) continue
+
+        return resolved
+      } catch { continue }
+    }
+    return null
+  }
+
+  // Scrape pages following actual next-page links
+  let pageUrl: string | null = categoryUrl
+  let page = 0
+
+  while (pageUrl && page < maxPages && storyUrls.length < maxStories) {
+    page++
+    const currentUrl = pageUrl
+    pageUrl = null // reset — will be set from next-page link
+
     try {
-      const html = await fetchUrl(pageUrl, 12000)
+      const html = await fetchUrl(currentUrl, 12000)
       const $ = cheerio.load(html)
 
       const found: string[] = []
@@ -95,14 +137,14 @@ export async function POST(req: NextRequest) {
         // Use configured selector — precise extraction
         $(storyListSel).each((_, el) => {
           const href = $(el).is('a') ? $(el).attr('href') : $(el).find('a').first().attr('href')
-          const url = extractStoryUrl(href ?? '', pageUrl)
+          const url = extractStoryUrl(href ?? '', currentUrl)
           if (url && !found.includes(url)) found.push(url)
         })
       } else {
         // Generic: scan all <a href> links
         $('a[href]').each((_, el) => {
           const href = $(el).attr('href') ?? ''
-          const url = extractStoryUrl(href, pageUrl)
+          const url = extractStoryUrl(href, currentUrl)
           if (url && !found.includes(url)) found.push(url)
         })
       }
@@ -114,13 +156,19 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Stop if no new stories found (end of list)
-      if (storyUrls.length === before && page > 1) break
+      // Get next page URL from actual HTML navigation
+      const nextUrl = getNextPageUrl($, currentUrl)
 
-      if (page < maxPages) await new Promise(r => setTimeout(r, 200))
+      // Stop conditions
+      if (storyUrls.length >= maxStories) break
+      if (!nextUrl) break
+      if (storyUrls.length === before && page > 1) break // No new stories on this page
+
+      pageUrl = nextUrl
+      await new Promise(r => setTimeout(r, 200))
     } catch {
       if (page === 1) {
-        return NextResponse.json({ error: `Không thể tải trang: ${pageUrl}` }, { status: 500 })
+        return NextResponse.json({ error: `Không thể tải trang: ${currentUrl}` }, { status: 500 })
       }
       break
     }
@@ -129,6 +177,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     storyUrls,
     total: storyUrls.length,
+    pagesScanned: page,
     usedSelector: storyListSel ?? null,
   })
 }
