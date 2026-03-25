@@ -20,27 +20,121 @@ const EXCLUDE_PATTERNS = [
   /\.(jpg|jpeg|png|gif|webp|svg|css|js|ico)$/i,
 ]
 
-// Common next-page selectors used by Vietnamese novel sites
+// Next-page selectors — ordered by specificity (most specific first)
 const NEXT_PAGE_SELECTORS = [
+  // Site-config override (handled separately below)
   'a[rel="next"]',
+  // Bootstrap glyphicon style (truyenfull, metruyenchu etc.)
+  '.pagination li:not(.disabled) a[title*="Trang"]:not([title*="đầu"]):not([title*="cuối"])',
+  'ul.pagination li:last-child:not(.disabled) a',
+  'ul.pagination .next a',
+  // Generic pagination classes
   '.pagination .next a',
+  '.pagination li.next a',
   'li.next a',
   '.pager-next a',
   'a.next-page',
-  // text-based
-  'a:contains("Trang kế")',
-  'a:contains("Tiếp")',
-  'a:contains("›"):last',
-  'a:contains("»"):last',
+  // Aria
   '.pagination a[aria-label*="ext"]',
-  // truyenfull-specific
-  '.page-link[aria-label="Next"]',
-  'ul.pagination li:last-child a',
+  // Common text patterns
+  'a[title*="Trang sau"]',
+  'a[title*="Next"]',
 ]
 
 /**
+ * Build paginated URLs using common URL patterns as fallback.
+ * Returns array of candidate URLs to try for page N.
+ */
+function buildPageUrlCandidates(base: string, page: number): string[] {
+  if (page === 1) return [base]
+  const b = base.replace(/\/$/, '')
+  if (b.includes('?')) {
+    // Already has query string — add page param
+    return [`${b}&page=${page}`, `${b}&trang=${page}`]
+  }
+  // Try both common Vietnamese novel site patterns
+  return [
+    `${b}/trang-${page}/`,
+    `${b}?page=${page}`,
+    `${b}/page/${page}/`,
+  ]
+}
+
+/**
+ * Get next-page URL from HTML pagination links.
+ */
+function getNextPageFromHtml(
+  $: ReturnType<typeof cheerio.load>,
+  currentUrl: string,
+  origin: string,
+  configuredSel: string | null
+): string | null {
+  const selectors = configuredSel
+    ? [configuredSel, ...NEXT_PAGE_SELECTORS]
+    : NEXT_PAGE_SELECTORS
+
+  for (const sel of selectors) {
+    try {
+      const el = $(sel).first()
+      const href = el.attr('href')
+      if (!href || href === '#' || href.startsWith('javascript')) continue
+      const resolved = href.startsWith('http') ? href : new URL(href, currentUrl).toString()
+      const u = new URL(resolved)
+      if (u.origin !== origin) continue
+      if (resolved === currentUrl) continue
+      return resolved
+    } catch { continue }
+  }
+  return null
+}
+
+/**
+ * Extract story URLs from a loaded page.
+ */
+function extractStoriesFromPage(
+  $: ReturnType<typeof cheerio.load>,
+  pageUrl: string,
+  origin: string,
+  categoryPathSegments: string[],
+  storyListSel: string | null
+): string[] {
+  const found: string[] = []
+
+  function tryHref(href: string | undefined): void {
+    if (!href) return
+    if (EXCLUDE_PATTERNS.some(p => p.test(href))) return
+    let abs: string
+    try {
+      abs = href.startsWith('http') ? href : new URL(href, pageUrl).toString()
+    } catch { return }
+    const u = new URL(abs)
+    if (u.origin !== origin) return
+    const pathParts = u.pathname.split('/').filter(Boolean)
+    if (pathParts.length !== 1) return
+    const slug = pathParts[0]
+    if (EXCLUDE_SLUGS.has(slug)) return
+    if (categoryPathSegments.includes(slug)) return
+    if (slug.includes('.')) return
+    if (!/^[a-zA-Z0-9\u00C0-\u024F-]+$/.test(slug)) return
+    const clean = `${origin}/${slug}`
+    if (!found.includes(clean)) found.push(clean)
+  }
+
+  if (storyListSel) {
+    $(storyListSel).each((_, el) => {
+      const href = $(el).is('a') ? $(el).attr('href') : $(el).find('a').first().attr('href')
+      tryHref(href)
+    })
+  } else {
+    $('a[href]').each((_, el) => tryHref($(el).attr('href')))
+  }
+
+  return found
+}
+
+/**
  * Scrape story list from a category/listing page.
- * Follows actual next-page links from HTML instead of guessing URL patterns.
+ * Uses HTML next-page links with URL pattern fallback.
  */
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -61,7 +155,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid URL' }, { status: 400 })
   }
 
-  // Look up site config for this domain (wrapped in try-catch in case DB schema is behind)
+  // Look up site config (wrapped in try-catch for DB schema resilience)
   const domain = new URL(categoryUrl).hostname.replace(/^www\./, '')
   let storyListSel: string | null = null
   let nextPageSel: string | null = null
@@ -72,106 +166,51 @@ export async function POST(req: NextRequest) {
   } catch { /* DB schema mismatch — proceed without site config */ }
 
   const storyUrls: string[] = []
+  let currentUrl: string = categoryUrl
+  let pagesScanned = 0
 
-  function extractStoryUrl(href: string, pageUrl: string): string | null {
-    if (!href) return null
-    if (EXCLUDE_PATTERNS.some(p => p.test(href))) return null
-
-    let abs: string
-    try {
-      abs = href.startsWith('http') ? href : new URL(href, pageUrl).toString()
-    } catch { return null }
-
-    const u = new URL(abs)
-    if (u.origin !== origin) return null
-
-    const pathParts = u.pathname.split('/').filter(Boolean)
-    if (pathParts.length !== 1) return null
-
-    const slug = pathParts[0]
-    if (EXCLUDE_SLUGS.has(slug)) return null
-    if (categoryPathSegments.includes(slug)) return null
-    if (slug.includes('.')) return null
-    if (!/^[a-zA-Z0-9\u00C0-\u024F-]+$/.test(slug)) return null
-
-    return `${origin}/${slug}`
-  }
-
-  function getNextPageUrl($: ReturnType<typeof cheerio.load>, currentUrl: string): string | null {
-    // Try site-configured selector first
-    const selectors = nextPageSel
-      ? [nextPageSel, ...NEXT_PAGE_SELECTORS]
-      : NEXT_PAGE_SELECTORS
-
-    for (const sel of selectors) {
-      try {
-        const el = $(sel).first()
-        const href = el.attr('href')
-        if (!href || href === '#' || href.includes('javascript')) continue
-
-        const resolved = href.startsWith('http') ? href : new URL(href, currentUrl).toString()
-
-        // Must differ from current page and same origin
-        const u = new URL(resolved)
-        if (u.origin !== origin) continue
-        if (resolved === currentUrl) continue
-
-        return resolved
-      } catch { continue }
-    }
-    return null
-  }
-
-  // Scrape pages following actual next-page links
-  let pageUrl: string | null = categoryUrl
-  let page = 0
-
-  while (pageUrl && page < maxPages && storyUrls.length < maxStories) {
-    page++
-    const currentUrl = pageUrl
-    pageUrl = null // reset — will be set from next-page link
-
+  while (pagesScanned < maxPages && storyUrls.length < maxStories) {
     try {
       const html = await fetchUrl(currentUrl, 12000)
       const $ = cheerio.load(html)
 
-      const found: string[] = []
-
-      if (storyListSel) {
-        // Use configured selector — precise extraction
-        $(storyListSel).each((_, el) => {
-          const href = $(el).is('a') ? $(el).attr('href') : $(el).find('a').first().attr('href')
-          const url = extractStoryUrl(href ?? '', currentUrl)
-          if (url && !found.includes(url)) found.push(url)
-        })
-      } else {
-        // Generic: scan all <a href> links
-        $('a[href]').each((_, el) => {
-          const href = $(el).attr('href') ?? ''
-          const url = extractStoryUrl(href, currentUrl)
-          if (url && !found.includes(url)) found.push(url)
-        })
-      }
-
+      const found = extractStoriesFromPage($, currentUrl, origin, categoryPathSegments, storyListSel)
       const before = storyUrls.length
       for (const url of found) {
-        if (!storyUrls.includes(url) && storyUrls.length < maxStories) {
-          storyUrls.push(url)
+        if (!storyUrls.includes(url) && storyUrls.length < maxStories) storyUrls.push(url)
+      }
+
+      pagesScanned++
+
+      // Stop if we've hit the limit
+      if (storyUrls.length >= maxStories) break
+
+      // 1. Try HTML next-page link first
+      let nextUrl = getNextPageFromHtml($, currentUrl, origin, nextPageSel)
+
+      // 2. Fallback: try URL pattern candidates
+      if (!nextUrl) {
+        const candidates = buildPageUrlCandidates(categoryUrl, pagesScanned + 1)
+        for (const candidate of candidates) {
+          if (candidate !== currentUrl) {
+            nextUrl = candidate
+            break
+          }
         }
       }
 
-      // Get next page URL from actual HTML navigation
-      const nextUrl = getNextPageUrl($, currentUrl)
-
-      // Stop conditions
-      if (storyUrls.length >= maxStories) break
       if (!nextUrl) break
-      if (storyUrls.length === before && page > 1) break // No new stories on this page
 
-      pageUrl = nextUrl
+      // Verify next URL would make progress (skip if same as current)
+      if (nextUrl === currentUrl) break
+
+      // Stop if no new stories were found (past end of list)
+      if (storyUrls.length === before && pagesScanned > 2) break
+
+      currentUrl = nextUrl
       await new Promise(r => setTimeout(r, 200))
     } catch {
-      if (page === 1) {
+      if (pagesScanned === 0) {
         return NextResponse.json({ error: `Không thể tải trang: ${currentUrl}` }, { status: 500 })
       }
       break
@@ -181,7 +220,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     storyUrls,
     total: storyUrls.length,
-    pagesScanned: page,
-    usedSelector: storyListSel ?? null,
+    pagesScanned,
+    usedSelector: storyListSel ?? '(generic)',
   })
 }
