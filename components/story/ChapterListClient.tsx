@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useEffect } from 'react'
 import Link from 'next/link'
-import { Search, Lock, ArrowUpDown, BookOpen, X, ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
+import { Search, Lock, ArrowUpDown, BookOpen, X, ChevronLeft, ChevronRight, Loader2, ChevronsLeft, ChevronsRight } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 
 interface Chapter {
@@ -19,84 +19,77 @@ interface Props {
   totalChapters: number
 }
 
-const GROUP_SIZE = 50
+const PAGE_SIZE = 20
 
 export default function ChapterListClient({ chapters: initialChapters, storySlug, totalChapters }: Props) {
   const [search, setSearch] = useState('')
-  const [sortDesc, setSortDesc] = useState(true)
+  const [sortDesc, setSortDesc] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
 
   // All chapters — start with SSR data, then lazy-load full list if there are more
   const [allChapters, setAllChapters] = useState<Chapter[]>(initialChapters)
   const [loading, setLoading] = useState(false)
-  const [fullyLoaded, setFullyLoaded] = useState(initialChapters.length >= totalChapters)
 
   // Lazy-load full chapter list if SSR only returned a partial set
   useEffect(() => {
-    if (initialChapters.length >= totalChapters) return // already complete
+    if (initialChapters.length >= totalChapters) return
     setLoading(true)
     fetch(`/api/stories/${storySlug}/chapters`)
       .then(r => r.json())
       .then(d => {
-        if (d.chapters?.length) {
-          setAllChapters(d.chapters)
-          setFullyLoaded(true)
-        }
+        if (d.chapters?.length) setAllChapters(d.chapters)
       })
       .catch(() => { /* keep SSR data if fetch fails */ })
       .finally(() => setLoading(false))
   }, [storySlug, totalChapters, initialChapters.length])
 
-  // Sort chapters asc for grouping
+  // Sort chapters
   const sorted = useMemo(() => {
-    return [...allChapters].sort((a, b) => a.chapterNum - b.chapterNum)
-  }, [allChapters])
-
-  // Group chapters into blocks of GROUP_SIZE
-  const groups = useMemo(() => {
-    const result: { label: string; start: number; end: number; chapters: Chapter[] }[] = []
-    for (let i = 0; i < sorted.length; i += GROUP_SIZE) {
-      const slice = sorted.slice(i, i + GROUP_SIZE)
-      result.push({
-        label: `Ch.${slice[0].chapterNum}–${slice[slice.length - 1].chapterNum}`,
-        start: slice[0].chapterNum,
-        end: slice[slice.length - 1].chapterNum,
-        chapters: slice,
-      })
-    }
-    return result
-  }, [sorted])
-
-  // Default: open last group (newest chapters)
-  const [openGroupIdx, setOpenGroupIdx] = useState<number>(() => Math.max(0, groups.length - 1))
-
-  // Keep openGroupIdx pointing to last group when more chapters load in
-  useEffect(() => {
-    setOpenGroupIdx(Math.max(0, groups.length - 1))
-  }, [groups.length])
+    const list = [...allChapters].sort((a, b) => a.chapterNum - b.chapterNum)
+    return sortDesc ? list.reverse() : list
+  }, [allChapters, sortDesc])
 
   // Search — searches across ALL loaded chapters
   const searchResults = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return null
-    const list = sorted.filter(ch =>
+    return sorted.filter(ch =>
       ch.chapterNum.toString().includes(q) ||
       (ch.title?.toLowerCase() ?? '').includes(q)
     )
-    return sortDesc ? [...list].reverse() : list
-  }, [sorted, search, sortDesc])
+  }, [sorted, search])
 
-  // Chapters within open group, respecting sort
-  const openGroupChapters = useMemo(() => {
-    const g = groups[openGroupIdx]
-    if (!g) return []
-    return sortDesc ? [...g.chapters].reverse() : g.chapters
-  }, [groups, openGroupIdx, sortDesc])
+  // Active list (search or all)
+  const activeList = searchResults ?? sorted
 
-  // Groups display order (for sort)
-  const displayGroups = useMemo(() =>
-    sortDesc ? [...groups].reverse() : groups,
-    [groups, sortDesc]
-  )
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(activeList.length / PAGE_SIZE))
+
+  // Reset to page 1 when search or sort changes
+  useEffect(() => { setCurrentPage(1) }, [search, sortDesc])
+  // Clamp page after list changes
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages)
+  }, [totalPages, currentPage])
+
+  const paginated = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE
+    return activeList.slice(start, start + PAGE_SIZE)
+  }, [activeList, currentPage])
+
+  // Page number window (show up to 5 pages around current)
+  const pageNumbers = useMemo(() => {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1)
+    const pages: (number | '...')[] = []
+    pages.push(1)
+    if (currentPage > 3) pages.push('...')
+    for (let p = Math.max(2, currentPage - 1); p <= Math.min(totalPages - 1, currentPage + 1); p++) {
+      pages.push(p)
+    }
+    if (currentPage < totalPages - 2) pages.push('...')
+    pages.push(totalPages)
+    return pages
+  }, [currentPage, totalPages])
 
   return (
     <div>
@@ -106,7 +99,7 @@ export default function ChapterListClient({ chapters: initialChapters, storySlug
           <div className="w-1 h-5 rounded-full gradient-primary flex-shrink-0" />
           <h2 className="text-lg font-bold">Danh sách chương</h2>
           <span className="text-sm text-muted-foreground flex items-center gap-1.5">
-            ({search ? `${searchResults?.length ?? 0}/` : ''}{totalChapters} chương)
+            ({search ? `${activeList.length}/` : ''}{totalChapters} chương)
             {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
           </span>
         </div>
@@ -122,7 +115,7 @@ export default function ChapterListClient({ chapters: initialChapters, storySlug
       </div>
 
       {/* Search box */}
-      <div className="relative mb-3">
+      <div className="relative mb-4">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none"/>
         <input
           value={search}
@@ -137,71 +130,87 @@ export default function ChapterListClient({ chapters: initialChapters, storySlug
         )}
       </div>
 
-      {/* Search mode: flat list */}
-      {searchResults !== null ? (
-        searchResults.length === 0 ? (
-          <div className="py-10 text-center">
-            <BookOpen className="w-10 h-10 mx-auto text-muted-foreground/30 mb-2"/>
-            <p className="text-sm text-muted-foreground">Không tìm thấy chương nào</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {searchResults.slice(0, 200).map(ch => (
-              <ChapterCard key={ch.id} ch={ch} storySlug={storySlug} />
-            ))}
-            {searchResults.length > 200 && (
-              <p className="col-span-2 text-xs text-center text-muted-foreground pt-2">
-                Hiển thị 200/{searchResults.length} kết quả — hãy thu hẹp tìm kiếm
-              </p>
-            )}
-          </div>
-        )
-      ) : (
-        /* Accordion group mode */
-        <div className="space-y-1.5">
-          {displayGroups.map((g, displayIdx) => {
-            const actualIdx = sortDesc ? groups.length - 1 - displayIdx : displayIdx
-            const isOpen = openGroupIdx === actualIdx
-            const chaps = isOpen ? openGroupChapters : []
-            return (
-              <div key={g.label} className="border border-border/60 rounded-xl overflow-hidden">
-                {/* Group header */}
-                <button
-                  onClick={() => setOpenGroupIdx(isOpen ? -1 : actualIdx)}
-                  className={`w-full flex items-center justify-between px-4 py-3 text-sm font-medium transition-colors ${
-                    isOpen ? 'bg-primary/5 text-primary border-b border-border/60' : 'hover:bg-muted'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    {isOpen
-                      ? <ChevronDown className="w-4 h-4 flex-shrink-0"/>
-                      : <ChevronRight className="w-4 h-4 flex-shrink-0 text-muted-foreground"/>
-                    }
-                    <span>{g.label}</span>
-                    <span className="text-xs text-muted-foreground font-normal">({g.chapters.length} chương)</span>
-                  </div>
-                </button>
-
-                {/* Chapter grid inside group */}
-                {isOpen && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 p-2">
-                    {chaps.map(ch => (
-                      <ChapterCard key={ch.id} ch={ch} storySlug={storySlug} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-
-          {/* Loading skeleton — shown while fetching remaining chapters */}
-          {loading && !fullyLoaded && (
-            <div className="flex items-center justify-center py-6 gap-2 text-sm text-muted-foreground">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Đang tải danh sách chương...
-            </div>
-          )}
+      {/* Chapter grid */}
+      {paginated.length === 0 ? (
+        <div className="py-10 text-center">
+          <BookOpen className="w-10 h-10 mx-auto text-muted-foreground/30 mb-2"/>
+          <p className="text-sm text-muted-foreground">Không tìm thấy chương nào</p>
         </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+          {paginated.map(ch => (
+            <ChapterCard key={ch.id} ch={ch} storySlug={storySlug} />
+          ))}
+        </div>
+      )}
+
+      {/* Pagination controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-1 mt-5 flex-wrap">
+          {/* First */}
+          <button
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(1)}
+            className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Trang đầu"
+          >
+            <ChevronsLeft className="w-4 h-4" />
+          </button>
+          {/* Prev */}
+          <button
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(p => p - 1)}
+            className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Trang trước"
+          >
+            <ChevronLeft className="w-4 h-4" />
+          </button>
+
+          {/* Page numbers */}
+          {pageNumbers.map((p, i) =>
+            p === '...' ? (
+              <span key={`ellipsis-${i}`} className="px-1 text-muted-foreground text-sm select-none">…</span>
+            ) : (
+              <button
+                key={p}
+                onClick={() => setCurrentPage(p as number)}
+                className={`min-w-[2.25rem] h-9 px-2 rounded-lg border text-sm font-medium transition-colors ${
+                  currentPage === p
+                    ? 'border-primary bg-primary text-white'
+                    : 'border-border hover:bg-muted text-foreground'
+                }`}
+              >
+                {p}
+              </button>
+            )
+          )}
+
+          {/* Next */}
+          <button
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(p => p + 1)}
+            className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Trang sau"
+          >
+            <ChevronRight className="w-4 h-4" />
+          </button>
+          {/* Last */}
+          <button
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(totalPages)}
+            className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            title="Trang cuối"
+          >
+            <ChevronsRight className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Page info */}
+      {totalPages > 1 && (
+        <p className="text-center text-xs text-muted-foreground mt-2">
+          Trang {currentPage}/{totalPages} · {activeList.length} chương
+        </p>
       )}
     </div>
   )

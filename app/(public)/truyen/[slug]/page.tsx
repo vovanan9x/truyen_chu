@@ -54,29 +54,22 @@ const STATUS_INFO = {
   HIATUS: { label: 'Tạm dừng', icon: AlertCircle, color: 'text-yellow-500' },
 }
 
-const CHAPTERS_PER_PAGE = 50
 
 export default async function StoryDetailPage({
   params,
-  searchParams,
 }: {
   params: { slug: string }
-  searchParams: { page?: string }
 }) {
   // force-dynamic (module-level) already disables caching — noStore() not needed
   const story = await getStoryBySlug(params.slug)
 
   if (!story) notFound()
 
-  const totalChapterPages = Math.ceil(story._count.chapters / CHAPTERS_PER_PAGE)
-  const page = Math.max(1, Math.min(parseInt(searchParams.page ?? '1', 10), totalChapterPages || 1))
   const [chapters, comments, siteSettings] = await Promise.all([
     prisma.chapter.findMany({
       where: { storyId: story.id },
       orderBy: { chapterNum: 'asc' },
-      // ✅ Paginated — only load CHAPTERS_PER_PAGE (50) at a time
-      take: CHAPTERS_PER_PAGE,
-      skip: (page - 1) * CHAPTERS_PER_PAGE,
+      take: 50,
       select: { id: true, chapterNum: true, title: true, isLocked: true, publishedAt: true },
     }),
     prisma.comment.findMany({
