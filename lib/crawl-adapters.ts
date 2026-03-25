@@ -523,7 +523,7 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
                 if (!href.includes('chuong') && !href.includes('chapter') && !href.includes('chap')) return
                 if (href === '#' || href.startsWith('javascript')) return
                 if (storySlug && !href.includes(storySlug)) return
-                const text = $$(el).attr('title') || $$(el).text().trim()
+                const text = $$(el).text().trim() || $$(el).attr('title') || ''
                 const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : ''
                 if (!chUrl) return
                 if (rawChaps.find(c => c.chUrl === chUrl)) return // dedup by URL
@@ -564,7 +564,7 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
             if (!$a.length) return
             const href = $a.attr('href') ?? ''
             if (!href || href.startsWith('#') || href.startsWith('javascript')) return
-            const text = $a.attr('title') || $a.text().trim()
+            const text = $a.text().trim() || $a.attr('title') || ''
             const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin2 + href : new URL(href, pageUrl!).toString()
             if (rawChaps.find(c => c.chUrl === chUrl)) return // dedup
             rawChaps.push({ title: text || chUrl, chUrl })
@@ -602,7 +602,7 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
           if (!$a.length) return
           const href = $a.attr('href') ?? ''
           if (!href || href === '#' || href.startsWith('javascript') || href.startsWith('mailto')) return
-          const text = $a.attr('title') || $a.text().trim()
+          const text = $a.text().trim() || $a.attr('title') || ''
           const chUrl = href.startsWith('http') ? href : href.startsWith('/') ? origin + href : ''
           if (!chUrl) return
           if (rawChaps.find(c => c.chUrl === chUrl)) return
