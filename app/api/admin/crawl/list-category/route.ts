@@ -4,6 +4,9 @@ import * as cheerio from 'cheerio'
 import { fetchUrl } from '@/lib/crawl-adapters'
 import { prisma } from '@/lib/prisma'
 
+// Allow up to 5 minutes for large category scans (1000+ pages)
+export const maxDuration = 300
+
 const EXCLUDE_SLUGS = new Set([
   'the-loai','tac-gia','tim-kiem','dang-nhap','dang-ky',
   'lich-su','bang-xep-hang','hoan-thanh','contact','tos',
@@ -114,7 +117,7 @@ export async function POST(req: NextRequest) {
       // Stop if no new stories found (end of list)
       if (storyUrls.length === before && page > 1) break
 
-      if (page < maxPages) await new Promise(r => setTimeout(r, 500))
+      if (page < maxPages) await new Promise(r => setTimeout(r, 200))
     } catch {
       if (page === 1) {
         return NextResponse.json({ error: `Không thể tải trang: ${pageUrl}` }, { status: 500 })
