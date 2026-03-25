@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import * as cheerio from 'cheerio'
+import * as zlib from 'zlib'
+import { promisify } from 'util'
 import { fetchUrl } from '@/lib/crawl-adapters'
 import { prisma } from '@/lib/prisma'
+
+const gunzip = promisify(zlib.gunzip)
 
 // Allow up to 5 minutes for large category scans (1000+ pages)
 export const maxDuration = 300
@@ -40,45 +44,107 @@ const NEXT_PAGE_SELECTORS = [
   'a.next-page',
 ]
 
+// ─── Sitemap Mode ──────────────────────────────────────────────────────────────
+
 /**
- * Build paginated URLs using common URL patterns as fallback.
- * Returns array of candidate URLs to try for page N.
+ * Parse story URLs from a sitemap XML string.
+ * Handles: regular XML, gzipped .xml.gz
+ * Also handles sitemap index files (which list other sitemaps).
  */
+async function fetchSitemapUrls(
+  sitemapUrl: string,
+  origin: string,
+  maxStories: number
+): Promise<{ storyUrls: string[]; pagesScanned: number }> {
+  const storyUrls: string[] = []
+  let pagesScanned = 0
+
+  async function processSitemap(url: string): Promise<void> {
+    pagesScanned++
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1)' },
+      signal: AbortSignal.timeout(30000),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching sitemap: ${url}`)
+
+    let xml: string
+    const contentType = res.headers.get('content-type') ?? ''
+    const isGzip = url.endsWith('.gz') || contentType.includes('gzip')
+
+    if (isGzip) {
+      const buffer = Buffer.from(await res.arrayBuffer())
+      const decompressed = await gunzip(buffer)
+      xml = decompressed.toString('utf-8')
+    } else {
+      xml = await res.text()
+    }
+
+    // Check if this is a sitemap index (lists other sitemaps)
+    const isSitemapIndex = xml.includes('<sitemapindex')
+    if (isSitemapIndex) {
+      // Extract child sitemap URLs
+      const childMatches = Array.from(xml.matchAll(/<loc>([\s\S]*?)<\/loc>/g))
+      const childUrls = childMatches
+        .map(m => m[1].trim())
+        .filter(u => u.includes('sitemap') || u.endsWith('.xml') || u.endsWith('.xml.gz'))
+      for (const childUrl of childUrls) {
+        if (storyUrls.length >= maxStories) break
+        await processSitemap(childUrl)
+      }
+      return
+    }
+
+    // Regular sitemap — parse <loc> entries
+    const locMatches = Array.from(xml.matchAll(/<loc>([\s\S]*?)<\/loc>/g))
+    const locs = locMatches.map(m => m[1].trim())
+    for (const loc of locs) {
+      if (storyUrls.length >= maxStories) break
+      try {
+        const u = new URL(loc)
+        if (u.origin !== origin) continue
+        const pathParts = u.pathname.split('/').filter(Boolean)
+        if (pathParts.length !== 1) continue
+        const slug = pathParts[0]
+        if (EXCLUDE_SLUGS.has(slug)) continue
+        if (slug.includes('.')) continue
+        if (!/^[a-zA-Z0-9\u00C0-\u024F-]+$/.test(slug)) continue
+        const clean = `${origin}/${slug}`
+        if (!storyUrls.includes(clean)) storyUrls.push(clean)
+      } catch { continue }
+    }
+  }
+
+  await processSitemap(sitemapUrl)
+  return { storyUrls, pagesScanned }
+}
+
+// ─── Category Scrape Mode ──────────────────────────────────────────────────────
+
 function buildPageUrlCandidates(base: string, page: number): string[] {
   if (page === 1) return [base]
-  // Ensure trailing slash before query string
   const withSlash = base.endsWith('/') ? base : base + '/'
   const withoutSlash = base.replace(/\/$/, '')
   return [
-    `${withSlash}?page=${page}`,          // e.g. /danh-sach/truyen-moi/?page=2
-    `${withoutSlash}/trang-${page}/`,      // e.g. /danh-sach/truyen-moi/trang-2/
+    `${withSlash}?page=${page}`,
+    `${withoutSlash}/trang-${page}/`,
     `${withoutSlash}/page/${page}/`,
     `${withoutSlash}?page=${page}`,
   ]
 }
 
-/**
- * Get next-page URL from HTML pagination links.
- */
 function getNextPageFromHtml(
   $: ReturnType<typeof cheerio.load>,
   currentUrl: string,
   origin: string
 ): string | null {
-
   for (const sel of NEXT_PAGE_SELECTORS) {
     try {
-      // For :has() selector which might fail in older cheerio, we wrap in try-catch
-      // But we can also check text manually if needed
       const el = $(sel).first()
       let href = el.attr('href')
-      
-      // If we didn't find href using the selector, let's try finding the icon manually
+
       if (!href && sel.includes(':has')) {
         const iconSel = sel.match(/:has\((.*?)\)/)?.[1]
-        if (iconSel) {
-          href = $(iconSel).closest('a').attr('href')
-        }
+        if (iconSel) href = $(iconSel).closest('a').attr('href')
       }
 
       if (!href || href === '#' || href.startsWith('javascript')) continue
@@ -92,9 +158,6 @@ function getNextPageFromHtml(
   return null
 }
 
-/**
- * Extract story URLs from a loaded page.
- */
 function extractStoriesFromPage(
   $: ReturnType<typeof cheerio.load>,
   pageUrl: string,
@@ -136,10 +199,8 @@ function extractStoriesFromPage(
   return found
 }
 
-/**
- * Scrape story list from a category/listing page.
- * Uses HTML next-page links with URL pattern fallback.
- */
+// ─── Main Route ────────────────────────────────────────────────────────────────
+
 export async function POST(req: NextRequest) {
   const session = await auth()
   if (!session || !['ADMIN', 'MOD'].includes(session.user.role as string)) {
@@ -150,22 +211,37 @@ export async function POST(req: NextRequest) {
   if (!categoryUrl) return NextResponse.json({ error: 'Missing categoryUrl' }, { status: 400 })
 
   let origin: string
-  let categoryPathSegments: string[]
   try {
-    const u = new URL(categoryUrl)
-    origin = u.origin
-    categoryPathSegments = u.pathname.split('/').filter(Boolean)
+    origin = new URL(categoryUrl).origin
   } catch {
     return NextResponse.json({ error: 'Invalid URL' }, { status: 400 })
   }
 
-  // Look up site config (wrapped in try-catch for DB schema resilience)
+  // ── Sitemap mode ──────────────────────────────
+  const isSitemap = /\.(xml|xml\.gz)(\?.*)?$/i.test(categoryUrl)
+    || categoryUrl.toLowerCase().includes('sitemap')
+  if (isSitemap) {
+    try {
+      const { storyUrls, pagesScanned } = await fetchSitemapUrls(categoryUrl, origin, maxStories)
+      return NextResponse.json({
+        storyUrls,
+        total: storyUrls.length,
+        pagesScanned,
+        mode: 'sitemap',
+      })
+    } catch (e: any) {
+      return NextResponse.json({ error: `Lỗi đọc sitemap: ${e?.message}` }, { status: 500 })
+    }
+  }
+
+  // ── Category scrape mode ──────────────────────
+  const categoryPathSegments = new URL(categoryUrl).pathname.split('/').filter(Boolean)
   const domain = new URL(categoryUrl).hostname.replace(/^www\./, '')
+
   let storyListSel: string | null = null
   try {
     const siteConfig = await prisma.siteConfig.findUnique({ where: { domain } })
     storyListSel = (siteConfig as any)?.storyListSel as string | null ?? null
-    // NOTE: nextPageSel is for chapter list pagination, NOT used here
   } catch { /* DB schema mismatch — proceed without site config */ }
 
   const storyUrls: string[] = []
@@ -185,29 +261,18 @@ export async function POST(req: NextRequest) {
 
       pagesScanned++
 
-      // Stop if we've hit the limit
       if (storyUrls.length >= maxStories) break
 
-      // 1. Try HTML next-page link
       let nextUrl = getNextPageFromHtml($, currentUrl, origin)
-
-      // 2. Fallback: try URL pattern candidates
       if (!nextUrl) {
         const candidates = buildPageUrlCandidates(categoryUrl, pagesScanned + 1)
         for (const candidate of candidates) {
-          if (candidate !== currentUrl) {
-            nextUrl = candidate
-            break
-          }
+          if (candidate !== currentUrl) { nextUrl = candidate; break }
         }
       }
 
       if (!nextUrl) break
-
-      // Verify next URL would make progress (skip if same as current)
       if (nextUrl === currentUrl) break
-
-      // Stop if no new stories were found (past end of list)
       if (storyUrls.length === before && pagesScanned > 2) break
 
       currentUrl = nextUrl
@@ -224,6 +289,7 @@ export async function POST(req: NextRequest) {
     storyUrls,
     total: storyUrls.length,
     pagesScanned,
+    mode: 'scrape',
     usedSelector: storyListSel ?? '(generic)',
   })
 }
