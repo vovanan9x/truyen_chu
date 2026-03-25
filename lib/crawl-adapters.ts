@@ -161,12 +161,11 @@ function extractDomain(url: string): string {
 }
 
 // ─── Helper: extract clean HTML from chapter content ──────────────────────────
-// Keeps formatting tags (p, br, strong, em, etc.) but removes all dangerous/noise
+// Only keeps <p> and <br> tags — all other tags are stripped for safety
 
 const ALLOWED_TAGS = new Set([
-  'p', 'br', 'b', 'strong', 'i', 'em', 'u', 's', 'del',
-  'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'ul', 'ol', 'li', 'blockquote', 'hr', 'span', 'div',
+  'p', 'br', 'b', 'strong', 'i', 'em', 'blockquote', 'hr', 'span',
+  'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
 ])
 
 export function extractCleanHtml($el: ReturnType<typeof cheerio.load>, selector: string): string {
