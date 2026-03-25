@@ -103,6 +103,8 @@ export interface SiteAdapter {
   fetchStoryInfo(url: string, html: string): StoryInfo
   fetchChapterList(url: string, html: string): { chapters: ChapterRef[]; nextPageUrl?: string }
   fetchChapterContent(url: string, html: string): string
+  /** Optional: extract chapter title from the chapter page itself — overrides title from chapter list */
+  fetchChapterTitle?(url: string, html: string): string | null
   /** Optional: override full chapter list fetching (e.g. via AJAX API) */
   fetchAllChapters?(storyUrl: string, html: string): Promise<ChapterRef[]>
 }
@@ -218,6 +220,7 @@ export interface DbSiteConfig {
   chapterListSel?: string | null
   chapterContentSel?: string | null
   chapterTitleSel?: string | null
+  chapterTitleRegex?: string | null  // Regex to extract/clean title text, e.g. Chương \d+[:\-\s]+(.+)$
   nextPageSel?: string | null
   // Chapter list API config (for AJAX pagination)
   chapterApiUrl?: string | null    // e.g. /get/listchap/{storyId}?page={page}
@@ -664,7 +667,28 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
 
       const plainText = $('body').text().replace(/\s+/g, ' ').trim().slice(0, 80000)
       return plainText.split(/\n{2,}/).map(p => `<p>${p.trim()}</p>`).join('\n')
-    }
+    },
+
+    // ── Chapter title extraction from chapter page ────────────────────────────
+    fetchChapterTitle(_url, html) {
+      if (!cfg.chapterTitleSel) return null
+      const $ = cheerio.load(html)
+      const rawText = $(cfg.chapterTitleSel).first().text().trim()
+      if (!rawText) return null
+
+      if (cfg.chapterTitleRegex) {
+        try {
+          // Support optional capture group: if regex has group 1 → use it, else use full match
+          const regex = new RegExp(cfg.chapterTitleRegex, 'i')
+          const m = rawText.match(regex)
+          if (m) return (m[1] ?? m[0]).trim() || null
+        } catch {
+          // Invalid regex — fall through to raw text
+        }
+      }
+
+      return rawText || null
+    },
   }
 }
 

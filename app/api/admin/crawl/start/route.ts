@@ -364,7 +364,12 @@ async function runCrawlJob(
         }
 
         const content = adapter.fetchChapterContent(ch.url, html!)
+
+        // If adapter supports chapter title extraction from chapter page → override ch.title
+        const pageTitle = adapter.fetchChapterTitle?.(ch.url, html!) ?? null
+
         const wordCount = countWordsInHtml(content)
+
 
         if (!content || wordCount < 10) {
           const errMsg = `Nội dung quá ngắn (${wordCount} từ) — selector "chapterContentSel" có thể sai`
@@ -378,7 +383,7 @@ async function runCrawlJob(
         // Batch upsert: track for later bulk insert
         chaptersToBatchInsert.push({
           storyId: story.id, chapterNum: ch.num,
-          title: ch.title || null, content, wordCount,
+          title: pageTitle || ch.title || null, content, wordCount,
           isLocked: false, coinCost: 0
         })
 

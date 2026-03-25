@@ -19,8 +19,8 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const { domain, name, titleSelector, authorSelector, coverSelector, descSelector,
-      genreSelector, chapterListSel, chapterContentSel, chapterTitleSel, nextPageSel,
-      chapterApiUrl, storyIdPattern, chapterApiJson,
+      genreSelector, chapterListSel, chapterContentSel, chapterTitleSel, chapterTitleRegex,
+      nextPageSel, chapterApiUrl, storyIdPattern, chapterApiJson,
       cookies, notes, isActive } = body
 
     if (!domain || !name) return NextResponse.json({ error: 'domain và name là bắt buộc' }, { status: 400 })
@@ -37,6 +37,7 @@ export async function POST(req: NextRequest) {
       chapterListSel: chapterListSel || null,
       chapterContentSel: chapterContentSel || null,
       chapterTitleSel: chapterTitleSel || null,
+      chapterTitleRegex: chapterTitleRegex || null,
       nextPageSel: nextPageSel || null,
       chapterApiUrl: chapterApiUrl || null,
       storyIdPattern: storyIdPattern || null,
@@ -65,8 +66,8 @@ export async function PATCH(req: NextRequest) {
 
   try {
     const { id, domain, name, titleSelector, authorSelector, coverSelector, descSelector,
-      genreSelector, chapterListSel, chapterContentSel, chapterTitleSel, nextPageSel,
-      chapterApiUrl, storyIdPattern, chapterApiJson,
+      genreSelector, chapterListSel, chapterContentSel, chapterTitleSel, chapterTitleRegex,
+      nextPageSel, chapterApiUrl, storyIdPattern, chapterApiJson,
       cookies, notes, isActive } = await req.json()
     if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
@@ -80,6 +81,7 @@ export async function PATCH(req: NextRequest) {
     if (chapterListSel !== undefined) data.chapterListSel = chapterListSel || null
     if (chapterContentSel !== undefined) data.chapterContentSel = chapterContentSel || null
     if (chapterTitleSel !== undefined) data.chapterTitleSel = chapterTitleSel || null
+    if (chapterTitleRegex !== undefined) data.chapterTitleRegex = chapterTitleRegex || null
     if (nextPageSel !== undefined) data.nextPageSel = nextPageSel || null
     if (chapterApiUrl !== undefined) data.chapterApiUrl = chapterApiUrl || null
     if (storyIdPattern !== undefined) data.storyIdPattern = storyIdPattern || null

@@ -524,6 +524,8 @@ model SiteConfig {
   chapterListSel    String?
   chapterContentSel String?
   chapterTitleSel   String?
+  chapterTitleRegex String?  // Regex to extract/clean title, e.g. Chương \d+[:\-\s]+(.+)$
+
   nextPageSel       String?
   // Chapter list API (for AJAX-based pagination like /get/listchap/{storyId}?page={page})
   chapterApiUrl     String?  // URL template, e.g. /get/listchap/{storyId}?page={page}

@@ -14,7 +14,7 @@ interface PreviewData { adapterName:string;title:string;author:string;descriptio
 interface JobSummary { id:string;url:string;storyTitle?:string;storyId?:string;status:'pending'|'running'|'completed'|'failed'|'cancelled';importedChapters:number;totalChapters:number;failedChapters:number;createdAt:string;updatedAt:string;error?:string }
 interface FullJob extends JobSummary { logs:string[];fromChapter:number;toChapter:number;skippedChapters:number[];failedChaptersNums:number[] }
 interface CrawlSchedule { id:string;storyId:string;sourceUrl:string;intervalMinutes:number;isActive:boolean;lastChapterNum:number;lastRunAt:string|null;nextRunAt:string|null;lastError:string|null;story:{id:string;title:string;slug:string;coverUrl:string|null} }
-interface SiteConfig { id:string;domain:string;name:string;titleSelector?:string;authorSelector?:string;coverSelector?:string;descSelector?:string;genreSelector?:string;chapterListSel?:string;chapterContentSel?:string;chapterTitleSel?:string;nextPageSel?:string;chapterApiUrl?:string;storyIdPattern?:string;chapterApiJson?:string;cookies?:string;notes?:string;isActive:boolean }
+interface SiteConfig { id:string;domain:string;name:string;titleSelector?:string;authorSelector?:string;coverSelector?:string;descSelector?:string;genreSelector?:string;chapterListSel?:string;chapterContentSel?:string;chapterTitleSel?:string;chapterTitleRegex?:string;nextPageSel?:string;chapterApiUrl?:string;storyIdPattern?:string;chapterApiJson?:string;cookies?:string;notes?:string;isActive:boolean }
 interface CrawlLog { id:string;scheduleId:string|null;storyId:string|null;storyTitle:string|null;sourceUrl:string;startedAt:string;finishedAt:string|null;status:string;chaptersImported:number;chaptersTotal:number;errorMessage:string|null;triggeredBy:string }
 
 // ─── Helper components ──────────────────────────────────────────────────────────
@@ -1028,6 +1028,34 @@ export default function AdminCrawlerPage() {
                 )}
               </div>
 
+              {/* Chapter title extraction — selector + optional regex */}
+              <div className="rounded-xl border border-blue-500/20 bg-blue-50/5 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-blue-600">📝 Tiêu đề chương (từ trang chương)</span>
+                  <span className="text-xs text-muted-foreground">— nếu cấu hình, sẽ override tiêu đề từ danh sách</span>
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className={labelCls}>
+                      {editingConfig.chapterTitleSel ? <span className="text-green-600">✅ </span> : <span className="text-muted-foreground">⬜ </span>}
+                      Selector tiêu đề
+                    </label>
+                    <input value={editingConfig.chapterTitleSel??''}
+                      onChange={e=>setEditingConfig(p=>({...p!,chapterTitleSel:e.target.value||undefined}))}
+                      placeholder=".chapter-title h2 a" className={`${inputCls} w-full font-mono text-xs ${editingConfig.chapterTitleSel?'border-green-500/50':''}`}/>
+                  </div>
+                  <div>
+                    <label className={labelCls}>
+                      {editingConfig.chapterTitleRegex ? <span className="text-green-600">✅ </span> : <span className="text-muted-foreground">⬜ </span>}
+                      Regex lọc tiêu đề <span className="text-muted-foreground">(tuỳ chọn — group 1 = kết quả)</span>
+                    </label>
+                    <input value={editingConfig.chapterTitleRegex??''}
+                      onChange={e=>setEditingConfig(p=>({...p!,chapterTitleRegex:e.target.value||undefined}))}
+                      placeholder={`Ch\\u01b0\\u01a1ng \\d+[:\\-\\s]+(.+)$`} className={`${inputCls} w-full font-mono text-xs ${editingConfig.chapterTitleRegex?'border-green-500/50':''}`}/>
+                  </div>
+                </div>
+              </div>
+
               {/* Step 2: Name + Selectors */}
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Bước 2 — Kiểm tra và chỉnh sửa selectors</p>
               <div>
@@ -1044,7 +1072,6 @@ export default function AdminCrawlerPage() {
                   ['genreSelector','Thể loại'],
                   ['chapterListSel','Danh sách chương'],
                   ['chapterContentSel','Nội dung chương'],
-                  ['chapterTitleSel','Tiêu đề chương'],
                   ['nextPageSel','Nút trang kế'],
                 ] as [string,string][]).map(([key,label])=>{
                   const val = (editingConfig as any)[key]
