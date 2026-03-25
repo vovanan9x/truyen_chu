@@ -47,16 +47,14 @@ const NEXT_PAGE_SELECTORS = [
  */
 function buildPageUrlCandidates(base: string, page: number): string[] {
   if (page === 1) return [base]
-  const b = base.replace(/\/$/, '')
-  if (b.includes('?')) {
-    // Already has query string — add page param
-    return [`${b}&page=${page}`, `${b}&trang=${page}`]
-  }
-  // Try both common Vietnamese novel site patterns
+  // Ensure trailing slash before query string
+  const withSlash = base.endsWith('/') ? base : base + '/'
+  const withoutSlash = base.replace(/\/$/, '')
   return [
-    `${b}/trang-${page}/`,
-    `${b}?page=${page}`,
-    `${b}/page/${page}/`,
+    `${withSlash}?page=${page}`,          // e.g. /danh-sach/truyen-moi/?page=2
+    `${withoutSlash}/trang-${page}/`,      // e.g. /danh-sach/truyen-moi/trang-2/
+    `${withoutSlash}/page/${page}/`,
+    `${withoutSlash}?page=${page}`,
   ]
 }
 
@@ -66,14 +64,10 @@ function buildPageUrlCandidates(base: string, page: number): string[] {
 function getNextPageFromHtml(
   $: ReturnType<typeof cheerio.load>,
   currentUrl: string,
-  origin: string,
-  configuredSel: string | null
+  origin: string
 ): string | null {
-  const selectors = configuredSel
-    ? [configuredSel, ...NEXT_PAGE_SELECTORS]
-    : NEXT_PAGE_SELECTORS
 
-  for (const sel of selectors) {
+  for (const sel of NEXT_PAGE_SELECTORS) {
     try {
       const el = $(sel).first()
       const href = el.attr('href')
@@ -158,11 +152,10 @@ export async function POST(req: NextRequest) {
   // Look up site config (wrapped in try-catch for DB schema resilience)
   const domain = new URL(categoryUrl).hostname.replace(/^www\./, '')
   let storyListSel: string | null = null
-  let nextPageSel: string | null = null
   try {
     const siteConfig = await prisma.siteConfig.findUnique({ where: { domain } })
     storyListSel = (siteConfig as any)?.storyListSel as string | null ?? null
-    nextPageSel = siteConfig?.nextPageSel ?? null
+    // NOTE: nextPageSel is for chapter list pagination, NOT used here
   } catch { /* DB schema mismatch — proceed without site config */ }
 
   const storyUrls: string[] = []
@@ -185,8 +178,8 @@ export async function POST(req: NextRequest) {
       // Stop if we've hit the limit
       if (storyUrls.length >= maxStories) break
 
-      // 1. Try HTML next-page link first
-      let nextUrl = getNextPageFromHtml($, currentUrl, origin, nextPageSel)
+      // 1. Try HTML next-page link
+      let nextUrl = getNextPageFromHtml($, currentUrl, origin)
 
       // 2. Fallback: try URL pattern candidates
       if (!nextUrl) {
