@@ -23,12 +23,12 @@ export default function ChapterNav({
   const isBottom = position === 'bottom'
 
   return (
-    <nav className={`flex items-center justify-between gap-3 ${
+    <nav className={`items-center gap-3 ${
       isBottom
-        ? 'fixed bottom-0 left-0 right-0 z-40 glass border-t px-4 py-3 shadow-lg'
-        : ''
+        ? 'fixed bottom-0 left-0 right-0 z-40 glass border-t px-4 py-3 shadow-lg grid grid-cols-3'
+        : 'flex justify-between'
     }`}>
-      {/* Back to story */}
+      {/* Left: Back to story */}
       <div className="flex items-center gap-2">
         <Link
           href={`/truyen/${storySlug}`}
@@ -39,8 +39,8 @@ export default function ChapterNav({
         </Link>
       </div>
 
-      {/* Chapter navigation */}
-      <div className="flex items-center gap-2">
+      {/* Center: Chapter navigation */}
+      <div className="flex items-center justify-center gap-2">
         {prevChapter ? (
           <Link
             href={`/truyen/${storySlug}/chuong/${prevChapter}`}
@@ -76,7 +76,8 @@ export default function ChapterNav({
         )}
       </div>
 
-
+      {/* Right: empty spacer to balance grid */}
+      <div />
     </nav>
   )
 }
