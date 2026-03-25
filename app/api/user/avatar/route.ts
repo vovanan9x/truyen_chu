@@ -8,8 +8,8 @@ const ALLOWED_TYPES: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/jpg':  '.jpg',
   'image/png':  '.png',
-  'image/gif':  '.gif',
   'image/webp': '.webp',
+  // GIF không được phép (năng có thể là ảnh động)
 }
 const MAX_SIZE = 2 * 1024 * 1024 // 2 MB
 
@@ -46,6 +46,20 @@ export async function POST(req: NextRequest) {
   const filepath = join(uploadDir, filename)
 
   const buffer = Buffer.from(await file.arrayBuffer())
+
+  // Magic bytes check — ngăn file GIF giả mạo content-type
+  // GIF header: "GIF87a" hoặc "GIF89a"
+  if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46) {
+    return NextResponse.json({ error: 'Ảnh động (GIF) không được phép. Vui lòng dùng JPG, PNG hoặc WebP.' }, { status: 400 })
+  }
+  // WebP animated check: RIFF....WEBPVP8L or ANIM chunk
+  if (file.type === 'image/webp') {
+    const str = buffer.slice(0, 16).toString('ascii')
+    if (str.startsWith('RIFF') && buffer.indexOf(Buffer.from('ANIM')) !== -1) {
+      return NextResponse.json({ error: 'Ảnh WebP động không được phép.' }, { status: 400 })
+    }
+  }
+
   await writeFile(filepath, buffer)
 
   const avatarUrl = `/avatars/${filename}`
