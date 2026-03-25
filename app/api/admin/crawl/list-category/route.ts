@@ -61,11 +61,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid URL' }, { status: 400 })
   }
 
-  // Look up site config for this domain
+  // Look up site config for this domain (wrapped in try-catch in case DB schema is behind)
   const domain = new URL(categoryUrl).hostname.replace(/^www\./, '')
-  const siteConfig = await prisma.siteConfig.findUnique({ where: { domain } })
-  const storyListSel = (siteConfig as any)?.storyListSel as string | null ?? null
-  const nextPageSel = siteConfig?.nextPageSel || null
+  let storyListSel: string | null = null
+  let nextPageSel: string | null = null
+  try {
+    const siteConfig = await prisma.siteConfig.findUnique({ where: { domain } })
+    storyListSel = (siteConfig as any)?.storyListSel as string | null ?? null
+    nextPageSel = siteConfig?.nextPageSel ?? null
+  } catch { /* DB schema mismatch — proceed without site config */ }
 
   const storyUrls: string[] = []
 
