@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
 import * as cheerio from 'cheerio'
 import { fetchUrl } from '@/lib/crawl-adapters'
+import { prisma } from '@/lib/prisma'
 
 const EXCLUDE_SLUGS = new Set([
   'the-loai','tac-gia','tim-kiem','dang-nhap','dang-ky',
@@ -14,12 +15,11 @@ const EXCLUDE_SLUGS = new Set([
 const EXCLUDE_PATTERNS = [
   /^#/, /^javascript/, /^mailto/, /^tel/,
   /\.(jpg|jpeg|png|gif|webp|svg|css|js|ico)$/i,
-  /\?/, // query strings
 ]
 
 /**
- * Scrape story list from a category/listing page
- * Returns clean story URLs with their original domain
+ * Scrape story list from a category/listing page.
+ * Uses site config's storyListSel if available, falls back to generic link scanning.
  */
 export async function POST(req: NextRequest) {
   const session = await auth()
@@ -40,53 +40,69 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid URL' }, { status: 400 })
   }
 
+  // Look up site config for this domain
+  const domain = new URL(categoryUrl).hostname.replace(/^www\./, '')
+  const siteConfig = await prisma.siteConfig.findUnique({ where: { domain } })
+  const storyListSel = (siteConfig as any)?.storyListSel as string | null ?? null
+
   const storyUrls: string[] = []
 
-  // Build paginated URLs — try common pagination patterns
+  // Build paginated URL — try common VN novel site patterns
   function buildPageUrl(base: string, page: number): string {
     if (page === 1) return base
-    // Remove trailing slash, append page
     const b = base.replace(/\/$/, '')
-    return `${b}/trang-${page}/`
+    // Try ?page=N style (metruyenchu) or /trang-N/ style (truyenfull)
+    return b.includes('?') ? `${b}&page=${page}` : `${b}/trang-${page}/`
+  }
+
+  function extractStoryUrl(href: string, pageUrl: string): string | null {
+    if (!href) return null
+    if (EXCLUDE_PATTERNS.some(p => p.test(href))) return null
+
+    let abs: string
+    try {
+      abs = href.startsWith('http') ? href : new URL(href, pageUrl).toString()
+    } catch { return null }
+
+    const u = new URL(abs)
+    if (u.origin !== origin) return null
+
+    const pathParts = u.pathname.split('/').filter(Boolean)
+    if (pathParts.length !== 1) return null
+
+    const slug = pathParts[0]
+    if (EXCLUDE_SLUGS.has(slug)) return null
+    if (categoryPathSegments.includes(slug)) return null
+    if (slug.includes('.')) return null
+    if (!/^[a-zA-Z0-9\u00C0-\u024F-]+$/.test(slug)) return null
+
+    return `${origin}/${slug}`
   }
 
   // Scrape pages
   for (let page = 1; page <= maxPages && storyUrls.length < maxStories; page++) {
     const pageUrl = buildPageUrl(categoryUrl, page)
     try {
-      const html = await fetchUrl(pageUrl, 10000)
+      const html = await fetchUrl(pageUrl, 12000)
       const $ = cheerio.load(html)
 
       const found: string[] = []
-      $('a[href]').each((_, el) => {
-        const raw = $(el).attr('href') ?? ''
-        if (!raw) return
-        if (EXCLUDE_PATTERNS.some(p => p.test(raw))) return
 
-        // Resolve to absolute URL
-        let abs: string
-        try {
-          abs = raw.startsWith('http') ? raw : new URL(raw, pageUrl).toString()
-        } catch { return }
-
-        // Must be same origin
-        const u = new URL(abs)
-        if (u.origin !== origin) return
-
-        // Parse path: must be single-segment slug (not nested under category)
-        const pathParts = u.pathname.split('/').filter(Boolean)
-        if (pathParts.length !== 1) return
-
-        const slug = pathParts[0]
-        if (EXCLUDE_SLUGS.has(slug)) return
-        if (categoryPathSegments.includes(slug)) return
-        if (slug.includes('.')) return
-        // Slug should look like a story: letters, numbers, hyphens
-        if (!/^[a-zA-Z0-9\u00C0-\u024F-]+$/.test(slug)) return
-
-        const cleanUrl = `${origin}/${slug}/`
-        if (!found.includes(cleanUrl)) found.push(cleanUrl)
-      })
+      if (storyListSel) {
+        // Use configured selector — precise extraction
+        $(storyListSel).each((_, el) => {
+          const href = $(el).is('a') ? $(el).attr('href') : $(el).find('a').first().attr('href')
+          const url = extractStoryUrl(href ?? '', pageUrl)
+          if (url && !found.includes(url)) found.push(url)
+        })
+      } else {
+        // Generic: scan all <a href> links
+        $('a[href]').each((_, el) => {
+          const href = $(el).attr('href') ?? ''
+          const url = extractStoryUrl(href, pageUrl)
+          if (url && !found.includes(url)) found.push(url)
+        })
+      }
 
       const before = storyUrls.length
       for (const url of found) {
@@ -98,7 +114,6 @@ export async function POST(req: NextRequest) {
       // Stop if no new stories found (end of list)
       if (storyUrls.length === before && page > 1) break
 
-      // Polite delay between pages
       if (page < maxPages) await new Promise(r => setTimeout(r, 500))
     } catch {
       if (page === 1) {
@@ -108,5 +123,9 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  return NextResponse.json({ storyUrls, total: storyUrls.length })
+  return NextResponse.json({
+    storyUrls,
+    total: storyUrls.length,
+    usedSelector: storyListSel ?? null,
+  })
 }

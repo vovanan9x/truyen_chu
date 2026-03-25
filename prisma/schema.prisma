@@ -522,6 +522,7 @@ model SiteConfig {
   descSelector      String?
   genreSelector     String?
   chapterListSel    String?
+  storyListSel      String?  // CSS selector for story links on category/listing pages (batch crawl)
   chapterContentSel String?
   chapterTitleSel   String?
   chapterTitleRegex String?  // Regex to extract/clean title, e.g. Chương \d+[:\-\s]+(.+)$

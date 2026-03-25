@@ -217,6 +217,7 @@ export interface DbSiteConfig {
   descSelector?: string | null
   genreSelector?: string | null
   chapterListSel?: string | null
+  storyListSel?: string | null      // CSS selector for story links on category/listing pages
   chapterContentSel?: string | null
   chapterTitleSel?: string | null
   chapterTitleRegex?: string | null  // Regex to extract/clean title text, e.g. Chương \d+[:\-\s]+(.+)$
