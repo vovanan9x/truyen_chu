@@ -673,15 +673,20 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
     fetchChapterTitle(_url, html) {
       if (!cfg.chapterTitleSel) return null
       const $ = cheerio.load(html)
-      const rawText = $(cfg.chapterTitleSel).first().text().trim()
-      if (!rawText) return null
+      const $el = $(cfg.chapterTitleSel).first()
+      if (!$el.length) return null
+
+      const rawText = $el.text().trim()
+      const rawHtml = $el.html()?.trim() ?? ''
 
       if (cfg.chapterTitleRegex) {
         try {
-          // Support optional capture group: if regex has group 1 → use it, else use full match
           const regex = new RegExp(cfg.chapterTitleRegex, 'i')
-          const m = rawText.match(regex)
-          if (m) return (m[1] ?? m[0]).trim() || null
+          // Auto-detect: if regex contains HTML tags → match against innerHTML
+          // otherwise → match against plain text
+          const source = cfg.chapterTitleRegex.includes('<') ? rawHtml : rawText
+          const m = source.match(regex)
+          if (m) return (m[1] ?? m[0]).trim().replace(/<[^>]+>/g, '').trim() || null
         } catch {
           // Invalid regex — fall through to raw text
         }
