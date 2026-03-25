@@ -383,7 +383,7 @@ async function runCrawlJob(
         // Batch upsert: track for later bulk insert
         chaptersToBatchInsert.push({
           storyId: story.id, chapterNum: ch.num,
-          title: pageTitle || ch.title || null, content, wordCount,
+          title: pageTitle || null, content, wordCount,
           isLocked: false, coinCost: 0
         })
 

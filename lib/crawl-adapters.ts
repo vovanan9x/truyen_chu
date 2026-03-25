@@ -679,19 +679,24 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
       const rawText = $el.text().trim()
       const rawHtml = $el.html()?.trim() ?? ''
 
+      // 1. Try regex if configured
       if (cfg.chapterTitleRegex) {
         try {
           const regex = new RegExp(cfg.chapterTitleRegex, 'i')
-          // Auto-detect: if regex contains HTML tags → match against innerHTML
-          // otherwise → match against plain text
           const source = cfg.chapterTitleRegex.includes('<') ? rawHtml : rawText
           const m = source.match(regex)
-          if (m) return (m[1] ?? m[0]).trim().replace(/<[^>]+>/g, '').trim() || null
-        } catch {
-          // Invalid regex — fall through to raw text
-        }
+          if (m) {
+            const result = (m[1] ?? m[0]).trim().replace(/<[^>]+>/g, '').trim()
+            if (result) return result
+          }
+        } catch { /* invalid regex — skip */ }
       }
 
+      // 2. Fallback: <a> child text inside selector element
+      const aText = $el.find('a').first().text().trim()
+      if (aText) return aText
+
+      // 3. Last fallback: full element plain text
       return rawText || null
     },
   }
