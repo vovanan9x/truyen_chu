@@ -46,7 +46,7 @@ export async function PATCH(req: NextRequest) {
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
   const data: any = {}
-  const allowed = ['name','categoryUrl','intervalMinutes','maxPages','maxStories','fromChapter','skipExisting','isActive']
+  const allowed = ['name','categoryUrl','intervalMinutes','maxPages','maxStories','fromChapter','skipExisting','updateExisting','concurrency','chapterDelay','isActive']
   for (const key of allowed) {
     if (rest[key] !== undefined) data[key] = rest[key]
   }

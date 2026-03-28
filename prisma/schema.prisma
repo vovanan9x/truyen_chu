@@ -500,6 +500,9 @@ model BatchCrawlSchedule {
   maxStories      Int       @default(50)
   fromChapter     Int       @default(1)
   skipExisting    Boolean   @default(true)  // bỏ qua truyện đã có trong DB
+  updateExisting  Boolean   @default(false) // cập nhật chương mới cho truyện đã có (crawl từ chương cuối)
+  concurrency     Int       @default(3)     // số chương fetch song song
+  chapterDelay    Int       @default(500)   // delay (ms) giữa các batch chương
   lastRunAt       DateTime?
   nextRunAt       DateTime?
   lastError       String?

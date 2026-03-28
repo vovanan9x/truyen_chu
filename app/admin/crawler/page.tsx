@@ -153,7 +153,7 @@ export default function AdminCrawlerPage() {
   const [saveError, setSaveError] = useState('')
 
   // --- Batch schedule tab ---
-  interface BatchSchedule { id:string;name:string;categoryUrl:string;intervalMinutes:number;isActive:boolean;maxPages:number;maxStories:number;fromChapter:number;skipExisting:boolean;lastRunAt:string|null;nextRunAt:string|null;lastError:string|null;lastImported:number }
+  interface BatchSchedule { id:string;name:string;categoryUrl:string;intervalMinutes:number;isActive:boolean;maxPages:number;maxStories:number;fromChapter:number;skipExisting:boolean;updateExisting:boolean;concurrency:number;chapterDelay:number;lastRunAt:string|null;nextRunAt:string|null;lastError:string|null;lastImported:number }
   const [batchSchedules, setBatchSchedules] = useState<BatchSchedule[]>([])
   const [editingBatch, setEditingBatch] = useState<Partial<BatchSchedule>|null>(null)
   const [savingBatch, setSavingBatch] = useState(false)
@@ -1027,10 +1027,20 @@ export default function AdminCrawlerPage() {
                     <input type="number" min={1} max={500} value={editingBatch.maxStories??50} onChange={e=>setEditingBatch(p=>({...p!,maxStories:+e.target.value}))} className={inputCls+' w-full'}/></div>
                   <div><label className={labelCls}>Từ chương</label>
                     <input type="number" min={1} value={editingBatch.fromChapter??1} onChange={e=>setEditingBatch(p=>({...p!,fromChapter:+e.target.value}))} className={inputCls+' w-full'}/></div>
+                  <div><label className={labelCls}>Song song (concurrency)</label>
+                    <input type="number" min={1} max={10} value={editingBatch.concurrency??3} onChange={e=>setEditingBatch(p=>({...p!,concurrency:+e.target.value}))} className={inputCls+' w-full'}/></div>
+                  <div><label className={labelCls}>Delay giữa batch (ms)</label>
+                    <input type="number" min={100} max={5000} step={100} value={editingBatch.chapterDelay??500} onChange={e=>setEditingBatch(p=>({...p!,chapterDelay:+e.target.value}))} className={inputCls+' w-full'}/></div>
                   <div className="flex items-end pb-2.5">
                     <label className="flex items-center gap-2 text-sm cursor-pointer">
                       <input type="checkbox" checked={editingBatch.skipExisting!==false} onChange={e=>setEditingBatch(p=>({...p!,skipExisting:e.target.checked}))} className="accent-primary w-4 h-4"/>
                       Bỏ qua truyện đã có
+                    </label>
+                  </div>
+                  <div className="flex items-end pb-2.5">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={editingBatch.updateExisting===true} onChange={e=>setEditingBatch(p=>({...p!,updateExisting:e.target.checked}))} className="accent-primary w-4 h-4"/>
+                      <span>Cập nhật chương mới cho truyện đã có <span className="text-xs text-muted-foreground">(crawl từ chương cuối)</span></span>
                     </label>
                   </div>
                 </div>
@@ -1081,6 +1091,14 @@ export default function AdminCrawlerPage() {
                           className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 disabled:opacity-50">
                           {runningBatch===bs.id?<Loader2 className="w-3 h-3 animate-spin"/>:<Play className="w-3 h-3"/>}Chạy ngay
                         </button>
+                        {runningBatch===bs.id && (
+                          <button onClick={async()=>{
+                            await fetch('/api/admin/crawl/batch-schedules/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:bs.id})})
+                            setRunningBatch(null)
+                          }} className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-50 text-destructive text-xs font-medium hover:bg-red-100">
+                            <StopCircle className="w-3 h-3"/> Dừng
+                          </button>
+                        )}
                         <button onClick={()=>setEditingBatch(bs)} className="p-1.5 rounded-lg hover:bg-muted text-sm">✏️</button>
                         <button onClick={async()=>{ await fetch(`/api/admin/crawl/batch-schedules?id=${bs.id}`,{method:'DELETE'}); fetchSchedules() }} className="p-1.5 rounded-lg hover:bg-red-50 text-destructive"><Trash2 className="w-4 h-4"/></button>
                         <button onClick={async()=>{ await fetch('/api/admin/crawl/batch-schedules',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:bs.id,isActive:!bs.isActive})}); fetchSchedules() }} className="p-1.5 rounded-lg hover:bg-muted">
