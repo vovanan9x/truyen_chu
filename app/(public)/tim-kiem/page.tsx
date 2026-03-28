@@ -2,6 +2,7 @@ import { Metadata } from 'next'
 import { prisma } from '@/lib/prisma'
 import StoryGrid from '@/components/story/StoryGrid'
 import { StoryCardData } from '@/components/story/StoryCard'
+import SearchSuggestions from '@/components/search/SearchSuggestions'
 
 export const metadata: Metadata = {
   title: 'Tìm kiếm truyện',
@@ -49,7 +50,7 @@ export default async function SearchPage({
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <h1 className="text-2xl font-bold mb-6">Tìm kiếm</h1>
 
-      <form method="GET" action="/tim-kiem" className="mb-8">
+      <form method="GET" action="/tim-kiem" className="mb-6">
         <div className="flex gap-3 max-w-2xl">
           <input
             type="text"
@@ -57,6 +58,7 @@ export default async function SearchPage({
             defaultValue={q}
             placeholder="Nhập tên truyện hoặc tác giả..."
             className="flex-1 px-4 py-3 rounded-xl border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30 text-sm"
+            autoComplete="off"
           />
           <button
             type="submit"
@@ -66,6 +68,9 @@ export default async function SearchPage({
           </button>
         </div>
       </form>
+
+      {/* Popular keyword suggestions + auto-logs current query */}
+      <SearchSuggestions currentQuery={q || undefined} />
 
       {q && (
         <p className="text-muted-foreground text-sm mb-4">
