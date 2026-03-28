@@ -4,6 +4,16 @@ import { runBatchWithOptions, type BatchRunOptions } from '@/lib/scheduler'
 import { createBatchJob, updateBatchJob } from '@/lib/crawl-jobs'
 import { randomUUID } from 'crypto'
 
+// Fix #7: Validate URL scheme — only allow http/https
+function isValidHttpUrl(url: string): boolean {
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 // POST /api/admin/crawl/batch-run
 // Fire-and-forget manual batch crawl with full options support
 export async function POST(req: NextRequest) {
@@ -28,15 +38,24 @@ export async function POST(req: NextRequest) {
   if (!categoryUrl?.trim())
     return NextResponse.json({ error: 'Thiếu categoryUrl' }, { status: 400 })
 
+  // Fix #7: Validate URL scheme
+  if (!isValidHttpUrl(categoryUrl.trim()))
+    return NextResponse.json({ error: 'URL phải bắt đầu bằng http:// hoặc https://' }, { status: 400 })
+
+  // Sanitize numeric params to prevent abuse
+  const safeConcurrency = Math.min(Math.max(1, Number(concurrency) || 3), 20)
+  const safeMaxStories = Math.min(Math.max(1, Number(maxStories) || 50), 1000)
+  const safeMaxPages = Math.min(Math.max(1, Number(maxPages) || 3), 50)
+
   const runKey = `manual_${randomUUID().slice(0, 8)}`
   const jobId = createBatchJob(runKey)
 
   const opts: BatchRunOptions = {
     name: 'Manual batch',
     categoryUrl: categoryUrl.trim(),
-    maxPages, maxStories, fromChapter,
+    maxPages: safeMaxPages, maxStories: safeMaxStories, fromChapter,
     skipExisting, updateExisting, overwrite,
-    concurrency, chapterDelay, storyDelay,
+    concurrency: safeConcurrency, chapterDelay, storyDelay,
     runKey,
     // No scheduleId — don't write BatchCrawlRun to DB for manual runs
   }

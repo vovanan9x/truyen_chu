@@ -31,6 +31,8 @@ export async function GET(_req: Request, { params }: { params: { page: string } 
     skip: page * PER_PAGE,
     take: PER_PAGE,
     orderBy: { updatedAt: 'desc' },
+    // Fix #8: Only index stories that have at least 1 chapter — skip empty crawl shells
+    where: { chapters: { some: {} } },
     select: { slug: true, updatedAt: true, status: true },
   })
 

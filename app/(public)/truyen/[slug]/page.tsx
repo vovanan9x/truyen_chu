@@ -15,6 +15,7 @@ import ChapterListClient from '@/components/story/ChapterListClient'
 import ExpandableDescription from '@/components/story/ExpandableDescription'
 import AdBanner from '@/components/ads/AdBanner'
 import ViewTracker from '@/components/story/ViewTracker'
+import StoryCard from '@/components/story/StoryCard'
 
 // Single reusable query for story lookup — avoids double DB hit between generateMetadata and page
 async function getStoryBySlug(slug: string) {
@@ -65,10 +66,13 @@ export default async function StoryDetailPage({
 
   if (!story) notFound()
 
-  const [chapters, comments, siteSettings] = await Promise.all([
+  // Related stories: same genres, exclude self, sorted by viewCount
+  const genreIds = story.genres.map(g => g.genre.id)
+
+  const [chapters, comments, siteSettings, relatedStories] = await Promise.all([
     prisma.chapter.findMany({
       where: { storyId: story.id },
-      orderBy: { chapterNum: 'asc' },
+      orderBy: { chapterNum: 'desc' },
       take: 50,
       select: { id: true, chapterNum: true, title: true, isLocked: true, publishedAt: true },
     }),
@@ -83,6 +87,20 @@ export default async function StoryDetailPage({
       },
     }),
     getSiteSettings(),
+    genreIds.length > 0
+      ? prisma.story.findMany({
+          where: {
+            id: { not: story.id },
+            genres: { some: { genreId: { in: genreIds } } },
+          },
+          take: 6,
+          orderBy: { viewCount: 'desc' },
+          include: {
+            genres: { include: { genre: true } },
+            _count: { select: { chapters: true } },
+          },
+        })
+      : Promise.resolve([]),
   ])
   const status = STATUS_INFO[story.status]
   const StatusIcon = status.icon
@@ -239,6 +257,30 @@ export default async function StoryDetailPage({
               }))}
             />
           </div>
+
+          {/* Related Stories */}
+          {relatedStories.length > 0 && (
+            <div>
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-1 h-5 rounded-full gradient-primary" />
+                <h2 className="text-lg font-bold">Truyện liên quan</h2>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {relatedStories.map((s) => (
+                  <StoryCard
+                    key={s.id}
+                    story={{
+                      id: s.id, slug: s.slug, title: s.title, coverUrl: s.coverUrl,
+                      author: s.author, status: s.status, viewCount: s.viewCount,
+                      updatedAt: s.updatedAt,
+                      genres: s.genres.map(sg => ({ name: sg.genre.name, slug: sg.genre.slug })),
+                      _count: { chapters: s._count.chapters },
+                    }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}

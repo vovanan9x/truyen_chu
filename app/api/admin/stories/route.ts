@@ -48,6 +48,10 @@ export async function POST(req: NextRequest) {
     },
   })
 
+  // Revalidate sitemap so new story appears immediately
+  revalidatePath('/sitemap.xml')
+  revalidatePath('/sitemap-index')
+
   return NextResponse.json({ success: true, story }, { status: 201 })
 }
 

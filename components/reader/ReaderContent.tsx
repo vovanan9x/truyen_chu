@@ -1,5 +1,7 @@
 'use client'
 
+import sanitizeHtml from 'sanitize-html'
+
 interface ReaderContentProps {
   content: string
   isLocked: boolean
@@ -7,9 +9,21 @@ interface ReaderContentProps {
   fontFamily: 'serif' | 'sans-serif'
 }
 
+// Fix #4: Sanitize HTML content from crawled sources — allow safe tags only
+const ALLOWED_TAGS = ['p', 'br', 'div', 'span', 'strong', 'em', 'b', 'i', 'u', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote']
+const ALLOWED_ATTRS = { '*': ['class'] } // only allow class attribute
+
+function sanitize(html: string): string {
+  return sanitizeHtml(html, {
+    allowedTags: ALLOWED_TAGS,
+    allowedAttributes: ALLOWED_ATTRS,
+    disallowedTagsMode: 'discard',
+  })
+}
+
 // Detect if content is HTML or plain text
 function isHtmlContent(content: string): boolean {
-  return /<(p|br|div|span|strong|em|h[1-6]|ul|ol|li|blockquote)[\s>/]/i.test(content)
+  return /\<(p|br|div|span|strong|em|h[1-6]|ul|ol|li|blockquote)[\s>\/]/i.test(content)
 }
 
 // Split plain text into paragraphs
@@ -27,13 +41,13 @@ export default function ReaderContent({ content, isLocked, fontSize, fontFamily 
   }
 
   if (isHtml) {
-    // HTML content: split into preview/locked by rough character cut
     const totalLen = content.length
     const previewLen = isLocked ? Math.ceil(totalLen * 0.2) : totalLen
 
-    // Find a good cut point near previewLen (end of a </p> tag)
-    const previewHtml = content.slice(0, previewLen)
-    const lockedHtml = isLocked ? content.slice(previewLen) : ''
+    // Fix #4: Sanitize before rendering — strip scripts, iframes, onclick, etc.
+    const cleanContent = sanitize(content)
+    const previewHtml = cleanContent.slice(0, previewLen)
+    const lockedHtml = isLocked ? cleanContent.slice(previewLen) : ''
 
     return (
       <div className="relative">

@@ -17,33 +17,58 @@ export default async function SearchPage({
   const q = searchParams.q?.trim() ?? ''
 
   const stories = q
-    ? await prisma.story.findMany({
-        where: {
-          OR: [
-            { title: { contains: q, mode: 'insensitive' } },
-            { author: { contains: q, mode: 'insensitive' } },
-          ],
-        },
-        take: 24,
-        include: {
-          genres: { include: { genre: true } },
-          _count: { select: { chapters: true } },
-        },
-        orderBy: { viewCount: 'desc' },
-      })
+    ? await prisma.$queryRaw<any[]>`
+        SELECT
+          s.id, s.slug, s.title, s.cover_url AS "coverUrl",
+          s.author, s.status, s.view_count AS "viewCount", s.updated_at AS "updatedAt",
+          GREATEST(
+            similarity(s.title, ${q}),
+            similarity(COALESCE(s.author,''), ${q})
+          ) AS score
+        FROM stories s
+        WHERE
+          s.title ILIKE ${'%' + q + '%'}
+          OR s.author ILIKE ${'%' + q + '%'}
+          OR similarity(s.title, ${q}) > 0.15
+          OR similarity(COALESCE(s.author,''), ${q}) > 0.15
+        ORDER BY score DESC, s.view_count DESC
+        LIMIT 24
+      `
     : []
 
-  const mapped: StoryCardData[] = stories.map((s) => ({
+  // For raw query results, fetch genres separately
+  const storyIds: string[] = stories.map((s: any) => s.id)
+  const genreMap = new Map<string, { name: string; slug: string }[]>()
+  const chapterCountMap = new Map<string, number>()
+
+  if (storyIds.length > 0) {
+    const storyGenres = await prisma.storyGenre.findMany({
+      where: { storyId: { in: storyIds } },
+      include: { genre: { select: { name: true, slug: true } } },
+    })
+    for (const sg of storyGenres) {
+      if (!genreMap.has(sg.storyId)) genreMap.set(sg.storyId, [])
+      genreMap.get(sg.storyId)!.push({ name: sg.genre.name, slug: sg.genre.slug })
+    }
+    const chapterCounts = await prisma.chapter.groupBy({
+      by: ['storyId'],
+      where: { storyId: { in: storyIds } },
+      _count: { id: true },
+    })
+    for (const c of chapterCounts) chapterCountMap.set(c.storyId, c._count.id)
+  }
+
+  const mapped: StoryCardData[] = stories.map((s: any) => ({
     id: s.id,
     slug: s.slug,
     title: s.title,
     coverUrl: s.coverUrl,
     author: s.author,
     status: s.status,
-    viewCount: s.viewCount,
+    viewCount: Number(s.viewCount ?? 0),
     updatedAt: s.updatedAt,
-    genres: s.genres.map((sg) => ({ name: sg.genre.name, slug: sg.genre.slug })),
-    _count: { chapters: s._count.chapters },
+    genres: genreMap.get(s.id) ?? [],
+    _count: { chapters: chapterCountMap.get(s.id) ?? 0 },
   }))
 
   return (
