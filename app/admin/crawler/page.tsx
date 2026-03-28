@@ -195,9 +195,18 @@ export default function AdminCrawlerPage() {
   const [batchMaxPages, setBatchMaxPages] = useState(2)
   const [batchMaxStories, setBatchMaxStories] = useState(30)
   const [batchFromChapter, setBatchFromChapter] = useState(1)
-  const [batchDelaySec, setBatchDelaySec] = useState(5)
+  const [batchDelaySec, setBatchDelaySec] = useState(2000)
   const [batchParallelStories, setBatchParallelStories] = useState(1)
   const [batchChapterConcurrency, setBatchChapterConcurrency] = useState(5)
+  // New options
+  const [batchSkipExisting, setBatchSkipExisting] = useState(true)
+  const [batchUpdateExisting, setBatchUpdateExisting] = useState(false)
+  const [batchOverwrite, setBatchOverwrite] = useState(false)
+  const [batchUrlListMode, setBatchUrlListMode] = useState(false)
+  // Background job tracking
+  const [manualBatchJobId, setManualBatchJobId] = useState<string|null>(null)
+  const [manualBatchRunKey, setManualBatchRunKey] = useState<string|null>(null)
+  const manualBatchLogSince = useRef(0)
   const [batchStories, setBatchStories] = useState<string[]>([])
   const [batchFetching, setBatchFetching] = useState(false)
   const [batchRunning, setBatchRunning] = useState(false)
@@ -1571,8 +1580,77 @@ export default function AdminCrawlerPage() {
                   <option value={10}>10 (nhanh nhất)</option>
                 </select>
               </div>
-              <div><label className={labelCls}>Delay giữa truyện (s)</label>
-                <input type="number" value={batchDelaySec} onChange={e=>setBatchDelaySec(+e.target.value)} min={1} max={60} className={inputCls+' w-full'} disabled={batchRunning}/></div>
+              <div><label className={labelCls}>Delay giữa truyện (ms)</label>
+                <input type="number" value={batchDelaySec} onChange={e=>setBatchDelaySec(+e.target.value)} min={500} max={30000} step={500} className={inputCls+' w-full'} disabled={batchRunning}/></div>
+            </div>
+
+            {/* Behavior checkboxes */}
+            <div className="flex flex-wrap items-center gap-4 pt-1">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={batchSkipExisting} onChange={e=>setBatchSkipExisting(e.target.checked)} className="accent-primary w-4 h-4"/>
+                Bỏ qua truyện đã có
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={batchUpdateExisting} onChange={e=>setBatchUpdateExisting(e.target.checked)} className="accent-primary w-4 h-4"/>
+                <span>Cập nhật chương mới <span className="text-xs text-muted-foreground">(crawl từ chương cuối)</span></span>
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="checkbox" checked={batchOverwrite} onChange={e=>setBatchOverwrite(e.target.checked)} className="accent-primary w-4 h-4"/>
+                <span>Ghi đè <span className="text-xs text-muted-foreground">(xóa chapters cũ, crawl lại từ đầu)</span></span>
+              </label>
+            </div>
+
+            {/* Server-side run section */}
+            <div className="p-4 rounded-xl border border-blue-200/60 bg-blue-50/30 dark:bg-blue-500/5 space-y-3">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <div>
+                  <p className="text-sm font-semibold flex items-center gap-1.5">🖥️ Chạy nền (server-side)</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Đóng tab vẫn crawl tiếp · Tự retry · Dùng đầy đủ options trên</p>
+                </div>
+                <button
+                  disabled={!batchCategoryUrl||batchRunning||!!manualBatchJobId}
+                  onClick={async()=>{
+                    const res = await fetch('/api/admin/crawl/batch-run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+                      categoryUrl:batchCategoryUrl,maxPages:batchMaxPages,maxStories:batchMaxStories,fromChapter:batchFromChapter,
+                      skipExisting:batchSkipExisting,updateExisting:batchUpdateExisting,overwrite:batchOverwrite,
+                      concurrency:batchChapterConcurrency,chapterDelay:500,storyDelay:batchDelaySec,
+                    })})
+                    const d = await res.json()
+                    if(!res.ok){alert(d.error??'Lỗi');return}
+                    setManualBatchJobId(d.jobId)
+                    setManualBatchRunKey(d.runKey)
+                    setBatchLogs([])
+                    manualBatchLogSince.current = 0
+                    // Poll logs + job status
+                    const poll = async()=>{
+                      while(true){
+                        await new Promise(r=>setTimeout(r,2500))
+                        const lr = await fetch(`/api/admin/crawl/batch-run?runKey=${d.runKey}&since=${manualBatchLogSince.current}`)
+                        if(lr.ok){
+                          const ld = await lr.json()
+                          if(ld.logs.length>0){ manualBatchLogSince.current=ld.total; setBatchLogs(p=>[...p,...ld.logs]) }
+                          if(!ld.running) break
+                        } else break
+                      }
+                      // Final status
+                      const sr = await fetch(`/api/admin/crawl/batch-schedules/run/status?jobId=${d.jobId}`)
+                      if(sr.ok){ const sd=await sr.json(); if(sd.result) setBatchRunResult((prev:any)=>({...prev,'manual':{...sd.result}})) }
+                      setManualBatchJobId(null)
+                      setManualBatchRunKey(null)
+                    }
+                    poll()
+                  }}
+                  className="flex items-center gap-2 px-5 py-2 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50">
+                  {manualBatchJobId?<Loader2 className="w-4 h-4 animate-spin"/>:<Play className="w-4 h-4"/>}
+                  {manualBatchJobId?'Đang chạy nền...':'Chạy nền ngay'}
+                </button>
+              </div>
+              {manualBatchJobId&&(
+                <div className="flex items-center gap-2 text-xs text-blue-600">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"/>
+                  Đang chạy nền — có thể đóng tab, server vẫn tiếp tục
+                </div>
+              )}
             </div>
 
             {/* Tip */}
