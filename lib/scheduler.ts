@@ -346,6 +346,16 @@ async function runBatchSchedulerTick() {
   }
 }
 
+/** Normalize URL for comparison: lowercase scheme+host, strip trailing slash */
+function normalizeUrl(url: string): string {
+  try {
+    const u = new URL(url.trim())
+    return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}${u.search}`
+  } catch {
+    return url.trim().replace(/\/+$/, '')
+  }
+}
+
 /** Scan a batch schedule's categoryUrl, then import new stories. Exported for manual trigger. */
 export async function runBatchSchedule(scheduleId: string): Promise<{ imported: number; skipped: number; errors: number; storyUrls: string[] }> {
   const bs = await prisma.batchCrawlSchedule.findUniqueOrThrow({ where: { id: scheduleId } })
@@ -367,8 +377,10 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
   const crawlOpts = { concurrency: bs.concurrency, chapterDelay: bs.chapterDelay, proxyPool, scheduleId, log }
 
   // ── Step 1: collect story URLs from category page ──────────────────────────
-  log('🔍 Đang quét URL truyện...')
-  const storyUrls = await collectCategoryUrls(bs.categoryUrl, bs.maxPages, bs.maxStories)
+  log(`🔍 Đang quét URL truyện...`)
+  const rawUrls = await collectCategoryUrls(bs.categoryUrl, bs.maxPages, bs.maxStories)
+  // Normalize URLs to avoid trailing-slash mismatches
+  const storyUrls = Array.from(new Set(rawUrls.map(normalizeUrl)))
   log(`📋 Tìm thấy ${storyUrls.length} URL truyện`)
   console.log(`[BatchScheduler] Found ${storyUrls.length} story URLs`)
 
@@ -379,15 +391,25 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
   }
 
   // ── Step 2: resolve existing stories ────────────────────────────────────────
+  // Query with BOTH normalized and original URLs to handle legacy data
   const existingStories = await prisma.story.findMany({
-    where: { sourceUrl: { in: storyUrls } },
+    where: {
+      OR: [
+        { sourceUrl: { in: storyUrls } },
+        { sourceUrl: { in: storyUrls.map(u => u + '/') } },  // with trailing slash
+        { sourceUrl: { in: storyUrls.map(u => u.replace(/^https/, 'http')) } },  // http variant
+      ]
+    },
     select: {
       sourceUrl: true,
       chapters: { select: { chapterNum: true }, orderBy: { chapterNum: 'desc' }, take: 1 },
     },
   })
+  // Normalize DB sourceUrls for comparison
   const existingMap = new Map(
-    existingStories.map(s => [s.sourceUrl!, s.chapters[0]?.chapterNum ?? 0])
+    existingStories
+      .filter(s => s.sourceUrl)
+      .map(s => [normalizeUrl(s.sourceUrl!), s.chapters[0]?.chapterNum ?? 0])
   )
 
   // ── Step 3: decide what to crawl ───────────────────────────────────────────────
