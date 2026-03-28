@@ -35,6 +35,27 @@ function isBatchCancelled(scheduleId: string) {
   return _cancelledBatch.has(scheduleId)
 }
 
+// ─── Batch Log Store (realtime log streaming) ─────────────────────────────
+const _batchLogs = new Map<string, string[]>()  // scheduleId → logs
+
+function addBatchLog(scheduleId: string, msg: string) {
+  if (!_batchLogs.has(scheduleId)) _batchLogs.set(scheduleId, [])
+  const time = new Date().toLocaleTimeString('vi-VN')
+  _batchLogs.get(scheduleId)!.push(`[${time}] ${msg}`)
+}
+
+export function getBatchLogs(scheduleId: string, since = 0): string[] {
+  return (_batchLogs.get(scheduleId) ?? []).slice(since)
+}
+
+export function isBatchRunning(scheduleId: string): boolean {
+  return _cancelledBatch.has(scheduleId) === false && _batchLogs.has(scheduleId)
+}
+
+function clearBatchLogs(scheduleId: string) {
+  _batchLogs.set(scheduleId, [])
+}
+
 let schedulerStarted = false
 let schedulerTimer: ReturnType<typeof setInterval> | null = null
 
@@ -328,26 +349,36 @@ async function runBatchSchedulerTick() {
 /** Scan a batch schedule's categoryUrl, then import new stories. Exported for manual trigger. */
 export async function runBatchSchedule(scheduleId: string): Promise<{ imported: number; skipped: number; errors: number; storyUrls: string[] }> {
   const bs = await prisma.batchCrawlSchedule.findUniqueOrThrow({ where: { id: scheduleId } })
-  console.log(`[BatchScheduler] \uD83D\uDE80 Running "${bs.name}": ${bs.categoryUrl}`)
 
-  // Clear any previous cancel flag
+  // Init log session
+  clearBatchLogs(scheduleId)
   _cancelledBatch.delete(scheduleId)
+  const log = (msg: string) => addBatchLog(scheduleId, msg)
+
+  log(`🚀 Bắt đầu: "${bs.name}"`)
+  log(`🔗 URL: ${bs.categoryUrl}`)
+  log(`⚙️ Song song: ${bs.concurrency} ch. | Delay: ${bs.chapterDelay}ms | Trang: ${bs.maxPages} | Tối đa: ${bs.maxStories} truyện`)
+  console.log(`[BatchScheduler] \uD83D\uDE80 Running "${bs.name}": ${bs.categoryUrl}`)
 
   // Load proxy pool
   const crawlSettings = await getCrawlSettings()
   const proxyPool = crawlSettings.proxies ?? []
-  const crawlOpts = { concurrency: bs.concurrency, chapterDelay: bs.chapterDelay, proxyPool, scheduleId }
+  if (proxyPool.length > 0) log(`🔗 Proxy pool: ${proxyPool.length} proxy`)
+  const crawlOpts = { concurrency: bs.concurrency, chapterDelay: bs.chapterDelay, proxyPool, scheduleId, log }
 
   // ── Step 1: collect story URLs from category page ──────────────────────────
+  log('🔍 Đang quét URL truyện...')
   const storyUrls = await collectCategoryUrls(bs.categoryUrl, bs.maxPages, bs.maxStories)
+  log(`📋 Tìm thấy ${storyUrls.length} URL truyện`)
   console.log(`[BatchScheduler] Found ${storyUrls.length} story URLs`)
 
   if (storyUrls.length === 0) {
+    log('⚠️ Không tìm thấy URL nào — kiểm tra URL thể loại hoặc selector')
     await prisma.batchCrawlSchedule.update({ where: { id: scheduleId }, data: { lastImported: 0 } })
     return { imported: 0, skipped: 0, errors: 0, storyUrls: [] }
   }
 
-  // ── Step 2: resolve existing stories ───────────────────────────────────────
+  // ── Step 2: resolve existing stories ────────────────────────────────────────
   const existingStories = await prisma.story.findMany({
     where: { sourceUrl: { in: storyUrls } },
     select: {
@@ -359,9 +390,7 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
     existingStories.map(s => [s.sourceUrl!, s.chapters[0]?.chapterNum ?? 0])
   )
 
-  // ── Step 3: decide what to crawl ───────────────────────────────────────────
-  // newUrls   — stories not yet in DB → always import from bs.fromChapter
-  // updateUrls — stories already in DB → only if updateExisting=true, from lastChapter+1
+  // ── Step 3: decide what to crawl ───────────────────────────────────────────────
   const limit = bs.maxStories
   const newUrls = storyUrls.filter(u => !existingMap.has(u)).slice(0, limit)
   const updateUrls = bs.updateExisting
@@ -371,6 +400,7 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
   let skipped = storyUrls.length - newUrls.length - updateUrls.length
   if (bs.skipExisting && !bs.updateExisting) skipped = existingMap.size
 
+  log(`📊 Mới: ${newUrls.length} | Cập nhật: ${updateUrls.length} | Bỏ qua: ${skipped}`)
   console.log(`[BatchScheduler] New: ${newUrls.length}, Update: ${updateUrls.length}, Skip: ${skipped}`)
 
   // ── Step 4: import new stories ─────────────────────────────────────────────
@@ -378,12 +408,14 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
   let errors = 0
 
   for (const storyUrl of newUrls) {
-    if (isBatchCancelled(scheduleId)) break
+    if (isBatchCancelled(scheduleId)) { log('🛑 Đã dừng'); break }
     try {
       await importOneBatchStory(storyUrl, bs.fromChapter, crawlOpts)
       imported++
+      log(`✅ (${imported}/${newUrls.length}) Import: ${storyUrl}`)
       await sleep(2000)
     } catch (e: any) {
+      log(`❌ Import thất bại: ${storyUrl} — ${e?.message?.slice(0, 80)}`)
       console.error(`[BatchScheduler] \u274C (new) ${storyUrl}:`, e?.message)
       errors++
     }
@@ -391,20 +423,23 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
 
   // ── Step 5: update existing stories (new chapters only) ────────────────────
   for (const storyUrl of updateUrls) {
-    if (isBatchCancelled(scheduleId)) break
+    if (isBatchCancelled(scheduleId)) { log('🛑 Đã dừng'); break }
     const lastChapter = existingMap.get(storyUrl) ?? 0
     const fromChapter = lastChapter + 1
     try {
       await importOneBatchStory(storyUrl, fromChapter, crawlOpts)
       imported++
+      log(`✅ Cập nhật từ ch.${fromChapter}: ${storyUrl}`)
       await sleep(2000)
     } catch (e: any) {
+      log(`❌ Cập nhật thất bại: ${storyUrl} — ${e?.message?.slice(0, 80)}`)
       console.error(`[BatchScheduler] \u274C (update) ${storyUrl}:`, e?.message)
       errors++
     }
   }
 
   await prisma.batchCrawlSchedule.update({ where: { id: scheduleId }, data: { lastImported: imported } })
+  log(`🎉 Xong! Import: ${imported} | Lỗi: ${errors} | Bỏ qua: ${skipped}`)
   console.log(`[BatchScheduler] \u2705 "${bs.name}" done: +${imported} imported, ${skipped} skipped, ${errors} errors`)
   return { imported, skipped, errors, storyUrls: [...newUrls, ...updateUrls] }
 }
@@ -490,19 +525,20 @@ async function collectCategoryUrls(categoryUrl: string, maxPages: number, maxSto
 async function importOneBatchStory(
   storyUrl: string,
   fromChapter: number,
-  opts: { concurrency: number; chapterDelay: number; proxyPool: string[]; scheduleId: string }
+  opts: { concurrency: number; chapterDelay: number; proxyPool: string[]; scheduleId: string; log: (m: string) => void }
 ) {
-  const { concurrency, chapterDelay, proxyPool, scheduleId } = opts
+  const { concurrency, chapterDelay, proxyPool, scheduleId, log } = opts
   const { adapter, cookies: siteCookies } = await getAdapterWithDbConfig(storyUrl)
 
   // Pick sticky proxy for this story
   const stickyProxy = getHealthyProxy(proxyPool)
 
   const { html, attempts } = await fetchWithRetry(storyUrl, 15000, 3, siteCookies, stickyProxy, undefined, proxyPool)
-  if (attempts > 1) console.log(`[BatchScheduler] Story page retry x${attempts}: ${storyUrl}`)
+  if (attempts > 1) log(`  🔄 Story page retry x${attempts}`)
 
   const info = adapter.fetchStoryInfo(storyUrl, html)
   if (!info.title) throw new Error('Cannot parse story info')
+  log(`  📚 "${info.title}" — ${info.author || 'Không rõ tác giả'} | từ ch.${fromChapter}`)
 
   // Upsert story
   const { slugify } = await import('./utils')
@@ -565,6 +601,7 @@ async function importOneBatchStory(
   const toImport = chapters.filter(c => c.num >= fromChapter).sort((a, b) => a.num - b.num)
   let savedCount = 0
   let failCount = 0
+  log(`  📖 ${toImport.length} ch. cần import | song song ${concurrency}`)
 
   // Parallel chapter fetching using processInBatches + fetchWithRetry + proxy
   const toUpsert: { storyId: string; chapterNum: number; title: string | null; content: string; wordCount: number; isLocked: boolean; coinCost: number }[] = []
@@ -619,5 +656,6 @@ async function importOneBatchStory(
     })
   }
 
-  console.log(`[BatchScheduler] ✅ Imported "${info.title}" — ${savedCount}/${toImport.length} ch. | fail=${failCount} | parallel=${concurrency}`)
+  console.log(`[BatchScheduler] \u2705 Imported "${info.title}" \u2014 ${savedCount}/${toImport.length} ch. | fail=${failCount} | parallel=${concurrency}`)
+  log(`  💾 Lưu ${savedCount}/${toImport.length} ch. | lỗi ${failCount}`)
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { getAdminSession } from '@/lib/permissions'
 import { z } from 'zod'
+import { revalidatePath } from 'next/cache'
 
 const schema = z.object({
   title: z.string().min(1, 'Tên truyện không được để trống'),
@@ -68,10 +69,51 @@ export async function GET(req: NextRequest) {
       take: PER_PAGE,
       skip: (page - 1) * PER_PAGE,
       orderBy: { updatedAt: 'desc' },
-      include: { _count: { select: { chapters: true } } },
+      include: {
+        genres: { include: { genre: true } },
+        _count: { select: { chapters: true } },
+      },
     }),
     prisma.story.count({ where }),
   ])
 
   return NextResponse.json({ stories, total, page, totalPages: Math.ceil(total / PER_PAGE) })
 }
+
+// DELETE — Chỉ ADMIN, xóa cascade toàn bộ dữ liệu liên quan
+export async function DELETE(req: NextRequest) {
+  const { isAdmin } = await getAdminSession()
+  if (!isAdmin) return NextResponse.json({ error: 'Forbidden — chỉ ADMIN mới được xóa truyện' }, { status: 403 })
+
+  const id = req.nextUrl.searchParams.get('id')
+  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
+
+  const story = await prisma.story.findUnique({
+    where: { id },
+    include: { _count: { select: { chapters: true } } },
+  })
+  if (!story) return NextResponse.json({ error: 'Không tìm thấy truyện' }, { status: 404 })
+
+  // Cascade delete in transaction (FK-safe order).
+  // Note: Comment, Rating, ReadingList, ChapterReport already have onDelete: Cascade
+  // so they auto-delete when story/chapter is deleted.
+  // We manually delete what Prisma won't cascade automatically.
+  await prisma.$transaction([
+    prisma.chapter.deleteMany({ where: { storyId: id } }),       // → also cascades ChapterReport
+    prisma.storyGenre.deleteMany({ where: { storyId: id } }),
+    prisma.bookmark.deleteMany({ where: { storyId: id } }),
+    prisma.readingHistory.deleteMany({ where: { storyId: id } }),
+    prisma.crawlSchedule.deleteMany({ where: { storyId: id } }),
+    prisma.story.delete({ where: { id } }),                       // → cascades Comment, Rating, ReadingList
+  ])
+
+  revalidatePath('/admin/truyen')
+  revalidatePath('/')
+  revalidatePath('/truyen')
+
+  return NextResponse.json({
+    success: true,
+    message: `Đã xóa "${story.title}" và ${story._count.chapters} chương`,
+  })
+}
+

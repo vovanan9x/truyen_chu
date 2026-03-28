@@ -4,7 +4,7 @@ import { auth } from '@/lib/auth'
 import {
   LayoutDashboard, BookOpen, Users, Settings, LogOut, ChevronRight,
   CreditCard, MessageSquare, Tag, Globe, Wallet, ShieldCheck,
-  FileCheck, Banknote, Database, AlertCircle, Home, Search, Rocket, Terminal
+  FileCheck, Banknote, Database, AlertCircle, Home, Search, Rocket, Terminal, HardDrive
 } from 'lucide-react'
 
 const NAV_GROUPS = [
@@ -44,6 +44,7 @@ const NAV_GROUPS = [
     label: 'Hệ thống',
     items: [
       { href: '/admin/database', label: 'Database', icon: Database },
+      { href: '/admin/backup', label: 'Backup & Restore', icon: HardDrive },
       { href: '/admin/loi-he-thong', label: 'Lỗi hệ thống', icon: AlertCircle },
       { href: '/admin/seo', label: 'Cài đặt SEO', icon: Search },
       { href: '/admin/cai-dat/chung', label: 'Cài đặt chung', icon: Settings },

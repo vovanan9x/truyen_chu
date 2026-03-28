@@ -159,6 +159,33 @@ export default function AdminCrawlerPage() {
   const [savingBatch, setSavingBatch] = useState(false)
   const [runningBatch, setRunningBatch] = useState<string|null>(null)
   const [batchRunResult, setBatchRunResult] = useState<Record<string,{imported:number;skipped:number;errors:number}>>({}) 
+  const [schedLogs, setSchedLogs] = useState<Record<string, string[]>>({})
+  const schedLogSince = useRef<Record<string, number>>({})
+
+  // Poll logs every 2s while a batch schedule is running
+  useEffect(() => {
+    if (!runningBatch) return
+    let alive = true
+    const poll = async () => {
+      while (alive && runningBatch) {
+        const since = schedLogSince.current[runningBatch] ?? 0
+        const res = await fetch(`/api/admin/crawl/batch-schedules/logs?id=${runningBatch}&since=${since}`)
+        if (res.ok) {
+          const d = await res.json()
+          if (d.logs.length > 0) {
+            schedLogSince.current[runningBatch] = d.total
+            setSchedLogs(prev => ({ ...prev, [runningBatch!]: [...(prev[runningBatch!] ?? []), ...d.logs] }))
+          }
+          if (!d.running && d.logs.length === 0) break
+        }
+        await new Promise(r => setTimeout(r, 2000))
+      }
+    }
+    poll()
+    return () => { alive = false }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runningBatch])
+
 
   // --- Batch crawl tab ---
   const [batchCategoryUrl, setBatchCategoryUrl] = useState('')
@@ -1106,6 +1133,28 @@ export default function AdminCrawlerPage() {
                         </button>
                       </div>
                     </div>
+                    {/* Realtime log panel */}
+                    {schedLogs[bs.id] && schedLogs[bs.id].length > 0 && (
+                      <div className="mt-3 rounded-xl bg-zinc-950 border border-zinc-800 overflow-hidden">
+                        <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-800">
+                          <span className="text-xs text-zinc-400 font-mono flex items-center gap-1.5">
+                            {runningBatch===bs.id && <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"/>}
+                            Log realtime
+                          </span>
+                          <button onClick={()=>setSchedLogs(prev=>({...prev,[bs.id]:[]}))} className="text-xs text-zinc-500 hover:text-zinc-300">Xoá</button>
+                        </div>
+                        <div className="max-h-52 overflow-y-auto p-3 font-mono text-xs space-y-0.5">
+                          {schedLogs[bs.id].map((line,i)=>(
+                            <div key={i} className={`leading-relaxed whitespace-pre-wrap ${
+                              line.includes('❌')||line.includes('⚠️') ? 'text-red-400'
+                              : line.includes('✅')||line.includes('🎉')||line.includes('💾') ? 'text-green-400'
+                              : line.includes('🛑') ? 'text-yellow-400'
+                              : 'text-zinc-300'
+                            }`}>{line}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
