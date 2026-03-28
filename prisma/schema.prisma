@@ -521,6 +521,7 @@ model SiteConfig {
   coverSelector     String?
   descSelector      String?
   genreSelector     String?
+  statusSelector    String?  // CSS selector for story status element (ONGOING / COMPLETED / HIATUS)
   chapterListSel    String?
   storyListSel      String?  // CSS selector for story links on category/listing pages (batch crawl)
   chapterContentSel String?

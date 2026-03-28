@@ -216,6 +216,7 @@ export interface DbSiteConfig {
   coverSelector?: string | null
   descSelector?: string | null
   genreSelector?: string | null
+  statusSelector?: string | null   // CSS selector for story status element
   chapterListSel?: string | null
   storyListSel?: string | null      // CSS selector for story links on category/listing pages
   chapterContentSel?: string | null
@@ -339,10 +340,20 @@ function buildAdapterFromConfig(cfg: DbSiteConfig): SiteAdapter {
 
 
       const bodyText = $('body').text().toLowerCase()
-      const status: StoryInfo['status'] =
-        bodyText.includes('hoàn thành') || /\bfull\b/.test(bodyText) || bodyText.includes('đã hoàn') ? 'COMPLETED'
-        : bodyText.includes('tạm dừng') || bodyText.includes('hiatus') ? 'HIATUS'
-        : 'ONGOING'
+      let status: StoryInfo['status'] = 'ONGOING'
+      if (cfg.statusSelector) {
+        const statusText = $(cfg.statusSelector).first().text().toLowerCase().trim()
+        if (statusText.includes('hoàn thành') || /\bfull\b/.test(statusText) || statusText.includes('đã hoàn'))
+          status = 'COMPLETED'
+        else if (statusText.includes('tạm dừng') || statusText.includes('hiatus'))
+          status = 'HIATUS'
+        // else remains 'ONGOING'
+      } else {
+        if (bodyText.includes('hoàn thành') || /\bfull\b/.test(bodyText) || bodyText.includes('đã hoàn'))
+          status = 'COMPLETED'
+        else if (bodyText.includes('tạm dừng') || bodyText.includes('hiatus'))
+          status = 'HIATUS'
+      }
 
       let totalChapters = 0
       if (cfg.chapterListSel) totalChapters = $(cfg.chapterListSel).length

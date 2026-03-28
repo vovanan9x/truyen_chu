@@ -14,7 +14,7 @@ interface PreviewData { adapterName:string;title:string;author:string;descriptio
 interface JobSummary { id:string;url:string;storyTitle?:string;storyId?:string;status:'pending'|'running'|'completed'|'failed'|'cancelled';importedChapters:number;totalChapters:number;failedChapters:number;createdAt:string;updatedAt:string;error?:string }
 interface FullJob extends JobSummary { logs:string[];fromChapter:number;toChapter:number;skippedChapters:number[];failedChaptersNums:number[] }
 interface CrawlSchedule { id:string;storyId:string;sourceUrl:string;intervalMinutes:number;isActive:boolean;lastChapterNum:number;lastRunAt:string|null;nextRunAt:string|null;lastError:string|null;story:{id:string;title:string;slug:string;coverUrl:string|null} }
-interface SiteConfig { id:string;domain:string;name:string;titleSelector?:string;authorSelector?:string;coverSelector?:string;descSelector?:string;genreSelector?:string;chapterListSel?:string;storyListSel?:string;chapterContentSel?:string;chapterTitleSel?:string;chapterTitleRegex?:string;nextPageSel?:string;chapterApiUrl?:string;storyIdPattern?:string;chapterApiJson?:string;cookies?:string;notes?:string;isActive:boolean }
+interface SiteConfig { id:string;domain:string;name:string;titleSelector?:string;authorSelector?:string;coverSelector?:string;descSelector?:string;genreSelector?:string;statusSelector?:string;chapterListSel?:string;storyListSel?:string;chapterContentSel?:string;chapterTitleSel?:string;chapterTitleRegex?:string;nextPageSel?:string;chapterApiUrl?:string;storyIdPattern?:string;chapterApiJson?:string;cookies?:string;notes?:string;isActive:boolean }
 interface CrawlLog { id:string;scheduleId:string|null;storyId:string|null;storyTitle:string|null;sourceUrl:string;startedAt:string;finishedAt:string|null;status:string;chaptersImported:number;chaptersTotal:number;errorMessage:string|null;triggeredBy:string }
 
 // ─── Helper components ──────────────────────────────────────────────────────────
@@ -1070,6 +1070,7 @@ export default function AdminCrawlerPage() {
                   ['coverSelector','Ảnh bìa (attr: src)'],
                   ['descSelector','Mô tả'],
                   ['genreSelector','Thể loại'],
+                  ['statusSelector','Trạng thái truyện 🏷️'],
                   ['storyListSel','Link truyện (Batch Crawl) 🔥'],
                   ['chapterListSel','Danh sách chương'],
                   ['chapterContentSel','Nội dung chương'],
@@ -1182,7 +1183,7 @@ export default function AdminCrawlerPage() {
                       <div className="mt-2 flex flex-wrap gap-2">
                         {[
                           ['Tiêu đề',cfg.titleSelector],['Tác giả',cfg.authorSelector],['Ảnh bìa',cfg.coverSelector],
-                          ['Thể loại',cfg.genreSelector],['Nội dung',cfg.chapterContentSel],['Danh sách ch.',cfg.chapterListSel],
+                          ['Thể loại',cfg.genreSelector],['Trạng thái',cfg.statusSelector],['Nội dung',cfg.chapterContentSel],['Danh sách ch.',cfg.chapterListSel],
                           ['Link truyện',cfg.storyListSel],
                         ].filter(([,v])=>v).map(([label,val])=>(
                           <span key={label} className="text-xs bg-muted px-2 py-0.5 rounded font-mono">
