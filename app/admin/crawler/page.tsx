@@ -152,6 +152,14 @@ export default function AdminCrawlerPage() {
   const [savingConfig, setSavingConfig] = useState(false)
   const [saveError, setSaveError] = useState('')
 
+  // --- Batch schedule tab ---
+  interface BatchSchedule { id:string;name:string;categoryUrl:string;intervalMinutes:number;isActive:boolean;maxPages:number;maxStories:number;fromChapter:number;skipExisting:boolean;lastRunAt:string|null;nextRunAt:string|null;lastError:string|null;lastImported:number }
+  const [batchSchedules, setBatchSchedules] = useState<BatchSchedule[]>([])
+  const [editingBatch, setEditingBatch] = useState<Partial<BatchSchedule>|null>(null)
+  const [savingBatch, setSavingBatch] = useState(false)
+  const [runningBatch, setRunningBatch] = useState<string|null>(null)
+  const [batchRunResult, setBatchRunResult] = useState<Record<string,{imported:number;skipped:number;errors:number}>>({}) 
+
   // --- Batch crawl tab ---
   const [batchCategoryUrl, setBatchCategoryUrl] = useState('')
   const [batchMaxPages, setBatchMaxPages] = useState(2)
@@ -307,12 +315,14 @@ export default function AdminCrawlerPage() {
 
   const fetchSchedules = async () => {
     setSchedulesLoading(true)
-    const [schedRes, statusRes] = await Promise.all([
+    const [schedRes, statusRes, batchRes] = await Promise.all([
       fetch('/api/admin/crawl/schedules'),
       fetch('/api/admin/crawl/scheduler-status'),
+      fetch('/api/admin/crawl/batch-schedules'),
     ])
     if (schedRes.ok) { const d = await schedRes.json(); setSchedules(d.schedules) }
     if (statusRes.ok) { const d = await statusRes.json(); setSchedulerRunning(d.schedulerRunning) }
+    if (batchRes.ok) { const d = await batchRes.json(); setBatchSchedules(d.schedules) }
     setSchedulesLoading(false)
   }
 
@@ -926,9 +936,17 @@ export default function AdminCrawlerPage() {
                   <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse inline-block"/>⚙️ Built-in scheduler đang chạy (kiểm tra mỗi 1 phút)
                 </span>
               ) : (
-                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 text-amber-600 text-xs font-medium border border-amber-500/20">
-                  ⚠️ Scheduler chưa khởi động — restart server để bật
-                </span>
+                <button
+                  onClick={async () => {
+                    const res = await fetch('/api/admin/crawl/scheduler-status', { method: 'POST' })
+                    const d = await res.json()
+                    if (res.ok) setSchedulerRunning(d.schedulerRunning)
+                    alert(d.message ?? (res.ok ? '✅ Scheduler đã bật' : '❌ Lỗi'))
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 text-amber-600 text-xs font-medium border border-amber-500/20 hover:bg-amber-500/20 transition-colors"
+                >
+                  ⚠️ Scheduler chưa khởi động — <span className="underline font-semibold">Bấm để bật</span>
+                </button>
               )}
             </div>
             <button onClick={fetchSchedules} className="p-2 rounded-lg hover:bg-muted"><RefreshCw className="w-4 h-4"/></button>
@@ -976,6 +994,105 @@ export default function AdminCrawlerPage() {
               ))}
             </div>
           )}
+
+          {/* ── Batch Crawl Schedules ─────────────────────────────────────────────── */}
+          <div className="border-t border-border/60 pt-6 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+              <div>
+                <p className="font-bold flex items-center gap-2"><List className="w-4 h-4 text-primary"/> Lịch Batch Crawl</p>
+                <p className="text-xs text-muted-foreground mt-0.5">Tự động quét URL thể loại/sitemap để import truyện mới theo lịch</p>
+              </div>
+              <button onClick={()=>setEditingBatch({name:'',categoryUrl:'',intervalMinutes:1440,maxPages:3,maxStories:50,fromChapter:1,skipExisting:true,isActive:true})}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-primary text-white text-sm font-semibold hover:opacity-90">
+                <PlusCircle className="w-4 h-4"/> Thêm lịch batch
+              </button>
+            </div>
+
+            {editingBatch && (
+              <div className="p-5 rounded-2xl border border-primary/30 bg-card space-y-4">
+                <h4 className="font-bold">{editingBatch.id ? 'Sửa lịch batch' : 'Thêm lịch batch mới'}</h4>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div className="sm:col-span-2"><label className={labelCls}>Tên mô tả *</label>
+                    <input value={editingBatch.name??''} onChange={e=>setEditingBatch(p=>({...p!,name:e.target.value}))} placeholder="Tiên Hiệp - TruyenFull" className={inputCls+' w-full'}/></div>
+                  <div className="sm:col-span-2"><label className={labelCls}>URL thể loại hoặc Sitemap *</label>
+                    <input value={editingBatch.categoryUrl??''} onChange={e=>setEditingBatch(p=>({...p!,categoryUrl:e.target.value}))} placeholder="https://truyenfull.vision/the-loai/tien-hiep/" className={inputCls+' w-full'}/></div>
+                  <div><label className={labelCls}>Chu kỳ</label>
+                    <select value={editingBatch.intervalMinutes??1440} onChange={e=>setEditingBatch(p=>({...p!,intervalMinutes:+e.target.value}))} className={inputCls+' w-full'}>
+                      <option value={60}>1 giờ</option><option value={360}>6 giờ</option><option value={720}>12 giờ</option>
+                      <option value={1440}>24 giờ</option><option value={4320}>3 ngày</option><option value={10080}>7 ngày</option>
+                    </select></div>
+                  <div><label className={labelCls}>Số trang quét</label>
+                    <input type="number" min={1} max={50} value={editingBatch.maxPages??3} onChange={e=>setEditingBatch(p=>({...p!,maxPages:+e.target.value}))} className={inputCls+' w-full'}/></div>
+                  <div><label className={labelCls}>Tối đa truyện/lần</label>
+                    <input type="number" min={1} max={500} value={editingBatch.maxStories??50} onChange={e=>setEditingBatch(p=>({...p!,maxStories:+e.target.value}))} className={inputCls+' w-full'}/></div>
+                  <div><label className={labelCls}>Từ chương</label>
+                    <input type="number" min={1} value={editingBatch.fromChapter??1} onChange={e=>setEditingBatch(p=>({...p!,fromChapter:+e.target.value}))} className={inputCls+' w-full'}/></div>
+                  <div className="flex items-end pb-2.5">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={editingBatch.skipExisting!==false} onChange={e=>setEditingBatch(p=>({...p!,skipExisting:e.target.checked}))} className="accent-primary w-4 h-4"/>
+                      Bỏ qua truyện đã có
+                    </label>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={()=>setEditingBatch(null)} className="px-4 py-2 rounded-xl border border-border text-sm hover:bg-muted">Huỷ</button>
+                  <button disabled={savingBatch||!editingBatch.name||!editingBatch.categoryUrl} onClick={async()=>{
+                    setSavingBatch(true)
+                    const method = editingBatch.id ? 'PATCH' : 'POST'
+                    const res = await fetch('/api/admin/crawl/batch-schedules',{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(editingBatch)})
+                    if(res.ok){fetchSchedules();setEditingBatch(null)}
+                    setSavingBatch(false)
+                  }} className="flex items-center gap-2 px-5 py-2 rounded-xl gradient-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50">
+                    {savingBatch?<Loader2 className="w-4 h-4 animate-spin"/>:<Save className="w-4 h-4"/>} {savingBatch?'Đang lưu...':'Lưu'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {batchSchedules.length === 0 && !editingBatch ? (
+              <div className="py-8 text-center text-muted-foreground text-sm"><List className="w-10 h-10 mx-auto mb-2 opacity-30"/><p>Chưa có lịch batch nào</p></div>
+            ) : (
+              <div className="space-y-3">
+                {batchSchedules.map(bs=>(
+                  <div key={bs.id} className={`p-4 rounded-2xl border ${bs.isActive?'border-border':'border-border/50 opacity-60'} bg-card`}>
+                    <div className="flex items-start gap-3 flex-wrap">
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold">{bs.name}</p>
+                        <p className="text-xs text-muted-foreground truncate mt-0.5">{bs.categoryUrl}</p>
+                        <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1"><Timer className="w-3 h-3"/> Mỗi {bs.intervalMinutes >= 1440 ? `${bs.intervalMinutes/1440} ngày` : `${bs.intervalMinutes/60} giờ`}</span>
+                          <span>Tối đa {bs.maxStories} truyện / {bs.maxPages} trang</span>
+                          {bs.lastRunAt && <span>Lần cuối: {new Date(bs.lastRunAt).toLocaleString('vi-VN')}</span>}
+                          {bs.lastImported > 0 && <span className="text-green-600 font-medium">+{bs.lastImported} truyện</span>}
+                          {bs.lastError && <span className="text-destructive">⚠️ {bs.lastError.slice(0,60)}</span>}
+                          {batchRunResult[bs.id] && <span className="text-green-600 font-medium">✅ +{batchRunResult[bs.id].imported} | bỏ {batchRunResult[bs.id].skipped} | lỗi {batchRunResult[bs.id].errors}</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <button onClick={async()=>{
+                          setRunningBatch(bs.id)
+                          const res = await fetch('/api/admin/crawl/batch-schedules/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:bs.id})})
+                          const d = await res.json()
+                          if(res.ok) setBatchRunResult(prev=>({...prev,[bs.id]:{imported:d.imported,skipped:d.skipped,errors:d.errors}}))
+                          else alert(d.error ?? 'Lỗi')
+                          setRunningBatch(null)
+                          fetchSchedules()
+                        }} disabled={runningBatch===bs.id}
+                          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 disabled:opacity-50">
+                          {runningBatch===bs.id?<Loader2 className="w-3 h-3 animate-spin"/>:<Play className="w-3 h-3"/>}Chạy ngay
+                        </button>
+                        <button onClick={()=>setEditingBatch(bs)} className="p-1.5 rounded-lg hover:bg-muted text-sm">✏️</button>
+                        <button onClick={async()=>{ await fetch(`/api/admin/crawl/batch-schedules?id=${bs.id}`,{method:'DELETE'}); fetchSchedules() }} className="p-1.5 rounded-lg hover:bg-red-50 text-destructive"><Trash2 className="w-4 h-4"/></button>
+                        <button onClick={async()=>{ await fetch('/api/admin/crawl/batch-schedules',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:bs.id,isActive:!bs.isActive})}); fetchSchedules() }} className="p-1.5 rounded-lg hover:bg-muted">
+                          {bs.isActive?<ToggleRight className="w-5 h-5 text-green-500"/>:<ToggleLeft className="w-5 h-5 text-muted-foreground"/>}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

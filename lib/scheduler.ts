@@ -16,6 +16,7 @@ import { redis, cacheDel } from './redis'
 import { createJob, updateJob, addLog } from './crawl-jobs'
 import { getAdapterWithDbConfig, fetchUrl } from './crawl-adapters'
 import type { ChapterRef } from './crawl-adapters'
+import * as cheerio from 'cheerio'
 
 const CHECK_INTERVAL_MS = 60_000   // Check mỗi 1 phút
 const MAX_PER_TICK = 3             // Tối đa 3 schedules mỗi lần check
@@ -84,6 +85,9 @@ async function runSchedulerTick() {
   } catch (e: any) {
     console.error('[Scheduler] Tick error:', e?.message)
   }
+
+  // Also check batch crawl schedules
+  runBatchSchedulerTick().catch((e: any) => console.error('[Scheduler] Batch tick error:', e?.message))
 }
 
 async function runScheduledCrawlJob(
@@ -278,3 +282,245 @@ async function sendNewChapterNotifications(storyId: string, storyTitle: string, 
 }
 
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)) }
+
+// ─── Batch Crawl Scheduler ─────────────────────────────────────────────────────
+
+async function runBatchSchedulerTick() {
+  const now = new Date()
+  const due = await prisma.batchCrawlSchedule.findMany({
+    where: { isActive: true, nextRunAt: { lte: now } },
+    take: 2,
+  })
+  if (due.length === 0) return
+  console.log(`[BatchScheduler] ${due.length} batch schedule(s) due`)
+  for (const bs of due) {
+    // Update nextRunAt immediately to prevent double-run
+    const nextRunAt = new Date(now.getTime() + bs.intervalMinutes * 60_000)
+    await prisma.batchCrawlSchedule.update({
+      where: { id: bs.id },
+      data: { lastRunAt: now, nextRunAt, lastError: null },
+    })
+    // Run in background
+    runBatchSchedule(bs.id).catch(async (e: any) => {
+      console.error(`[BatchScheduler] \u274C "${bs.name}":`, e?.message)
+      await prisma.batchCrawlSchedule.update({
+        where: { id: bs.id },
+        data: { lastError: e?.message?.slice(0, 200) },
+      }).catch(() => {})
+    })
+  }
+}
+
+/** Scan a batch schedule's categoryUrl, then import new stories. Exported for manual trigger. */
+export async function runBatchSchedule(scheduleId: string): Promise<{ imported: number; skipped: number; errors: number; storyUrls: string[] }> {
+  const bs = await prisma.batchCrawlSchedule.findUniqueOrThrow({ where: { id: scheduleId } })
+  console.log(`[BatchScheduler] \uD83D\uDE80 Running "${bs.name}": ${bs.categoryUrl}`)
+
+  // ── Step 1: collect story URLs from category page ──────────────────────────
+  const storyUrls = await collectCategoryUrls(bs.categoryUrl, bs.maxPages, bs.maxStories)
+  console.log(`[BatchScheduler] Found ${storyUrls.length} story URLs`)
+
+  if (storyUrls.length === 0) {
+    await prisma.batchCrawlSchedule.update({ where: { id: scheduleId }, data: { lastImported: 0 } })
+    return { imported: 0, skipped: 0, errors: 0, storyUrls: [] }
+  }
+
+  // ── Step 2: optionally filter already-existing stories ─────────────────────
+  let toProcess = storyUrls
+  let skipped = 0
+  if (bs.skipExisting) {
+    const existing = await prisma.story.findMany({
+      where: { sourceUrl: { in: storyUrls } },
+      select: { sourceUrl: true },
+    })
+    const existingSet = new Set(existing.map(s => s.sourceUrl).filter(Boolean) as string[])
+    const before = toProcess.length
+    toProcess = toProcess.filter(u => !existingSet.has(u))
+    skipped = before - toProcess.length
+    console.log(`[BatchScheduler] Skipping ${skipped} existing stories, importing ${toProcess.length}`)
+  }
+
+  // ── Step 3: crawl & import each new story ──────────────────────────────────
+  let imported = 0
+  let errors = 0
+  for (const storyUrl of toProcess.slice(0, bs.maxStories)) {
+    try {
+      await importOneBatchStory(storyUrl, bs.fromChapter)
+      imported++
+      await sleep(2000) // polite delay between stories
+    } catch (e: any) {
+      console.error(`[BatchScheduler] \u274C ${storyUrl}:`, e?.message)
+      errors++
+    }
+  }
+
+  await prisma.batchCrawlSchedule.update({ where: { id: scheduleId }, data: { lastImported: imported } })
+  console.log(`[BatchScheduler] \u2705 "${bs.name}" done: +${imported} imported, ${skipped} skipped, ${errors} errors`)
+  return { imported, skipped, errors, storyUrls: toProcess }
+}
+
+/** Collect story URLs from a category URL (HTML scrape or sitemap) */
+async function collectCategoryUrls(categoryUrl: string, maxPages: number, maxStories: number): Promise<string[]> {
+  const origin = new URL(categoryUrl).origin
+  const isSitemap = /\.(xml|xml\.gz)(\?.*)?$/i.test(categoryUrl) || categoryUrl.toLowerCase().includes('sitemap')
+
+  if (isSitemap) {
+    // Simple sitemap fetch — grab <loc> entries
+    const res = await fetch(categoryUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(30000) })
+    const xml = await res.text()
+    const locs = Array.from(xml.matchAll(/<loc>([\s\S]*?)<\/loc>/g)).map(m => m[1].trim())
+    return locs.filter(u => {
+      try {
+        const p = new URL(u)
+        if (p.origin !== origin) return false
+        const parts = p.pathname.split('/').filter(Boolean)
+        return parts.length === 1 && /^[a-z0-9-]+$/.test(parts[0])
+      } catch { return false }
+    }).slice(0, maxStories)
+  }
+
+  // HTML scrape
+  const domain = new URL(categoryUrl).hostname.replace(/^www\./, '')
+  let storyListSel: string | null = null
+  try {
+    const cfg = await prisma.siteConfig.findUnique({ where: { domain } })
+    storyListSel = cfg?.storyListSel ?? null
+  } catch {}
+
+  const urls: string[] = []
+  let currentUrl = categoryUrl
+  const catSegments = new URL(categoryUrl).pathname.split('/').filter(Boolean)
+
+  for (let page = 0; page < maxPages && urls.length < maxStories; page++) {
+    try {
+      const html = await fetchUrl(currentUrl, 15000)
+      const $ = cheerio.load(html)
+
+      // Extract story links
+      const tryHref = (href: string | undefined) => {
+        if (!href) return
+        try {
+          const abs = href.startsWith('http') ? href : new URL(href, currentUrl).toString()
+          const u = new URL(abs)
+          if (u.origin !== origin) return
+          const parts = u.pathname.split('/').filter(Boolean)
+          if (parts.length !== 1) return
+          const slug = parts[0]
+          if (catSegments.includes(slug)) return
+          if (!/^[a-zA-Z0-9\u00C0-\u024F-]+$/.test(slug)) return
+          const clean = `${origin}/${slug}`
+          if (!urls.includes(clean)) urls.push(clean)
+        } catch {}
+      }
+
+      if (storyListSel) {
+        $(storyListSel).each((_, el) => {
+          const href = $(el).is('a') ? $(el).attr('href') : $(el).find('a').first().attr('href')
+          tryHref(href)
+        })
+      } else {
+        $('a[href]').each((_, el) => tryHref($(el).attr('href')))
+      }
+
+      if (urls.length >= maxStories) break
+
+      // Next page
+      const nextHref = $('a[rel="next"], .pagination .next a, li.next a').first().attr('href')
+      if (!nextHref || nextHref === '#') break
+      const nextUrl = nextHref.startsWith('http') ? nextHref : new URL(nextHref, currentUrl).toString()
+      if (nextUrl === currentUrl) break
+      currentUrl = nextUrl
+      await sleep(300)
+    } catch { break }
+  }
+  return urls.slice(0, maxStories)
+}
+
+/** Crawl and import a single story (info + all chapters) */
+async function importOneBatchStory(storyUrl: string, fromChapter: number) {
+  const { adapter } = await getAdapterWithDbConfig(storyUrl)
+  const html = await fetchUrl(storyUrl, 15000)
+  const info = adapter.fetchStoryInfo(storyUrl, html)
+  if (!info.title) throw new Error('Cannot parse story info')
+
+  // Upsert story
+  const { slugify } = await import('./utils')
+  const slug = slugify(info.title)
+
+  // Find unique slug
+  let finalSlug = slug
+  let attempt = 0
+  while (attempt < 5) {
+    const exists = await prisma.story.findUnique({ where: { slug: finalSlug } })
+    if (!exists) break
+    // If same source URL already → update, not create duplicate
+    if (exists.sourceUrl === storyUrl) { finalSlug = exists.slug; break }
+    attempt++
+    finalSlug = `${slug}-${attempt}`
+  }
+
+  // Upsert genres
+  const genreIds: string[] = []
+  for (const gName of info.genres) {
+    if (!gName.trim()) continue
+    const gSlug = slugify(gName)
+    const genre = await prisma.genre.upsert({
+      where: { slug: gSlug },
+      create: { name: gName, slug: gSlug },
+      update: {},
+    })
+    genreIds.push(genre.id)
+  }
+
+  const storyData: any = {
+    title: info.title,
+    author: info.author || null,
+    description: info.description || null,
+    coverUrl: info.coverUrl || null,
+    status: info.status,
+    sourceUrl: storyUrl,
+  }
+
+  const story = await prisma.story.upsert({
+    where: { slug: finalSlug },
+    create: { ...storyData, slug: finalSlug },
+    update: storyData,
+  })
+
+  // Sync genres
+  await prisma.storyGenre.deleteMany({ where: { storyId: story.id } })
+  if (genreIds.length > 0) {
+    await prisma.storyGenre.createMany({
+      data: genreIds.map(genreId => ({ storyId: story.id, genreId })),
+      skipDuplicates: true,
+    })
+  }
+
+  // Fetch & import chapters
+  let chapters: ChapterRef[] = []
+  if (adapter.fetchAllChapters) {
+    chapters = await adapter.fetchAllChapters(storyUrl, html)
+  } else {
+    chapters = adapter.fetchChapterList(storyUrl, html).chapters
+  }
+
+  const toImport = chapters.filter(c => c.num >= fromChapter).sort((a, b) => a.num - b.num)
+  let savedCount = 0
+  for (const ch of toImport) {
+    try {
+      const chHtml = await fetchUrl(ch.url, 12000)
+      const content = adapter.fetchChapterContent(ch.url, chHtml)
+      if (!content || content.length < 50) continue
+      const wordCount = content.replace(/<[^>]+>/g, ' ').split(/\s+/).filter(Boolean).length
+      await prisma.chapter.upsert({
+        where: { storyId_chapterNum: { storyId: story.id, chapterNum: ch.num } },
+        update: { content, wordCount, title: ch.title || null },
+        create: { storyId: story.id, chapterNum: ch.num, title: ch.title || null, content, wordCount, isLocked: false, coinCost: 0 },
+      })
+      savedCount++
+      await sleep(500)
+    } catch { /* skip failed chapter */ }
+  }
+
+  console.log(`[BatchScheduler] \u2705 Imported "${info.title}" — ${savedCount}/${toImport.length} chapters`)
+}

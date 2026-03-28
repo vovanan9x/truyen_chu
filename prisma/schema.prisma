@@ -488,6 +488,30 @@ model CrawlSchedule {
   @@map("crawl_schedules")
 }
 
+// --- Batch Crawl Schedule (tự động quét thể loại/sitemap để import truyện mới) --
+
+model BatchCrawlSchedule {
+  id              String    @id @default(cuid())
+  name            String    // Tên mô tả, ví dụ "Tiên Hiệp - TruyenFull"
+  categoryUrl     String    // URL thể loại hoặc sitemap
+  intervalMinutes Int       @default(1440) // Mặc định 24h
+  isActive        Boolean   @default(true)
+  maxPages        Int       @default(3)
+  maxStories      Int       @default(50)
+  fromChapter     Int       @default(1)
+  skipExisting    Boolean   @default(true)  // bỏ qua truyện đã có trong DB
+  lastRunAt       DateTime?
+  nextRunAt       DateTime?
+  lastError       String?
+  lastImported    Int       @default(0)     // số truyện import lần cuối
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([nextRunAt])
+  @@index([isActive])
+  @@map("batch_crawl_schedules")
+}
+
 // --- Crawl Log (lịch sử chạy crawler) ---------------------------------------
 
 model CrawlLog {

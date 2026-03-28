@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@/lib/auth'
-import { isSchedulerRunning } from '@/lib/scheduler'
+import { isSchedulerRunning, startScheduler } from '@/lib/scheduler'
 import { prisma } from '@/lib/prisma'
 
 export async function GET() {
@@ -19,5 +19,21 @@ export async function GET() {
     activeSchedules: activeCount,
     totalSchedules: totalCount,
     checkIntervalMinutes: 1,
+  })
+}
+
+// POST — khởi động scheduler thủ công (khi instrumentation hook không trigger)
+export async function POST() {
+  const session = await auth()
+  if (!session || session.user.role !== 'ADMIN') {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
+  }
+
+  const wasRunning = isSchedulerRunning()
+  if (!wasRunning) startScheduler()
+
+  return NextResponse.json({
+    schedulerRunning: isSchedulerRunning(),
+    message: wasRunning ? 'Scheduler đã chạy trước đó' : '✅ Scheduler đã được khởi động',
   })
 }

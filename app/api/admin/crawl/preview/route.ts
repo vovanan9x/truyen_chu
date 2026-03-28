@@ -29,14 +29,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Adapter ${adapter.name} không đọc được thông tin truyện. Site có thể đã thay đổi HTML.` }, { status: 400 })
     }
 
-    let chapters = adapter.fetchChapterList(url, html).chapters
+    // Preview only: get first-page chapters for sample display.
+    // Do NOT call fetchAllChapters here — for stories with thousands of chapters
+    // it would make thousands of HTTP requests and cause a timeout.
+    // totalChapters from info metadata (og:description, page text) is accurate enough for preview.
+    const { chapters } = adapter.fetchChapterList(url, html)
 
-    // If adapter has AJAX/smart fetcher, always use it for most accurate chapter list
-    if (adapter.fetchAllChapters) {
-      chapters = await adapter.fetchAllChapters(url, html)
-    }
-
-    // Update totalChapters from actual chapter list if more accurate
+    // If first page has chapters, use it to cross-check totalChapters
     if (chapters.length > info.totalChapters) {
       info.totalChapters = chapters.length
     }
