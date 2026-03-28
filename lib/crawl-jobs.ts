@@ -102,3 +102,40 @@ export function cancelJob(id: string): boolean {
 export function isCancelled(id: string): boolean {
   return cancelledJobs.has(id)
 }
+
+// ─── Batch Job Store ─────────────────────────────────────────────────────────
+// Tracks background batch schedule run status (fire-and-forget pattern)
+
+export type BatchJobStatus = 'running' | 'done' | 'cancelled' | 'error'
+
+export interface BatchJob {
+  id: string
+  scheduleId: string
+  status: BatchJobStatus
+  startedAt: Date
+  finishedAt?: Date
+  result?: { imported: number; updated: number; skipped: number; errors: number; retried: number }
+  error?: string
+}
+
+const batchJobStore = new Map<string, BatchJob>()
+const MAX_BATCH_JOBS = 50
+
+export function createBatchJob(scheduleId: string): string {
+  const id = `bj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  if (batchJobStore.size >= MAX_BATCH_JOBS) {
+    const oldest = Array.from(batchJobStore.keys())[0]
+    batchJobStore.delete(oldest)
+  }
+  batchJobStore.set(id, { id, scheduleId, status: 'running', startedAt: new Date() })
+  return id
+}
+
+export function getBatchJob(id: string): BatchJob | undefined {
+  return batchJobStore.get(id)
+}
+
+export function updateBatchJob(id: string, data: Partial<BatchJob>): void {
+  const job = batchJobStore.get(id)
+  if (job) Object.assign(job, data)
+}

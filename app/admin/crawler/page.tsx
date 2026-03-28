@@ -1136,10 +1136,29 @@ export default function AdminCrawlerPage() {
                           setRunningBatch(bs.id)
                           const res = await fetch('/api/admin/crawl/batch-schedules/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:bs.id})})
                           const d = await res.json()
-                          if(res.ok) setBatchRunResult(prev=>({...prev,[bs.id]:{imported:d.imported,skipped:d.skipped,errors:d.errors}}))
-                          else alert(d.error ?? 'Lỗi')
-                          setRunningBatch(null)
-                          fetchSchedules()
+                          if(!res.ok){ alert(d.error ?? 'Lỗi'); setRunningBatch(null); return }
+                          // Background job started — poll status every 3s
+                          const jobId = d.jobId
+                          const poll = async () => {
+                            while(true) {
+                              await new Promise(r=>setTimeout(r,3000))
+                              const sr = await fetch(`/api/admin/crawl/batch-schedules/run/status?jobId=${jobId}`)
+                              if(!sr.ok) break
+                              const sd = await sr.json()
+                              if(sd.status !== 'running') {
+                                if(sd.result) setBatchRunResult(prev=>({...prev,[bs.id]:{imported:sd.result.imported,skipped:sd.result.skipped,errors:sd.result.errors}}))
+                                setRunningBatch(null)
+                                fetchSchedules()
+                                // Refresh history panel if open
+                                if(expandedRuns[bs.id]) {
+                                  const hr = await fetch(`/api/admin/crawl/batch-schedules/runs?id=${bs.id}`)
+                                  if(hr.ok){ const hd = await hr.json(); setScheduleRuns(prev=>({...prev,[bs.id]:hd.runs})) }
+                                }
+                                break
+                              }
+                            }
+                          }
+                          poll()
                         }} disabled={runningBatch===bs.id}
                           className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-xs font-medium hover:bg-primary/20 disabled:opacity-50">
                           {runningBatch===bs.id?<Loader2 className="w-3 h-3 animate-spin"/>:<Play className="w-3 h-3"/>}Chạy ngay

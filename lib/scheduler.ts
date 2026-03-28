@@ -13,7 +13,7 @@
 import { randomUUID } from 'crypto'
 import { prisma } from './prisma'
 import { redis, cacheDel } from './redis'
-import { createJob, updateJob, addLog } from './crawl-jobs'
+import { createJob, updateJob, addLog, updateBatchJob } from './crawl-jobs'
 import { getAdapterWithDbConfig, fetchUrl, downloadAndSaveCover } from './crawl-adapters'
 import type { ChapterRef } from './crawl-adapters'
 import * as cheerio from 'cheerio'
@@ -357,7 +357,10 @@ function normalizeUrl(url: string): string {
 }
 
 /** Scan a batch schedule's categoryUrl, then import new stories. Exported for manual trigger. */
-export async function runBatchSchedule(scheduleId: string): Promise<{ imported: number; skipped: number; errors: number; storyUrls: string[] }> {
+export async function runBatchSchedule(
+  scheduleId: string,
+  batchJobId?: string
+): Promise<{ imported: number; skipped: number; errors: number; storyUrls: string[] }> {
   const bs = await prisma.batchCrawlSchedule.findUniqueOrThrow({ where: { id: scheduleId } })
 
   // Init log session
@@ -501,7 +504,9 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
   })
   log(`🎉 Xong! Import: ${imported} | Cập nhật: ${updated} | Lỗi: ${errors} | Retry: ${retried} | Bỏ qua: ${skipped}`)
   console.log(`[BatchScheduler] \u2705 "${bs.name}" done: +${imported} imported, ${updated} updated, ${skipped} skipped, ${errors} errors, ${retried} retried`)
-  return { imported, skipped, errors, storyUrls: [...newUrls, ...updateUrls] }
+  const finalResult = { imported, skipped, errors, storyUrls: [...newUrls, ...updateUrls] }
+  if (batchJobId) updateBatchJob(batchJobId, { status: cancelled ? 'cancelled' : 'done', finishedAt: new Date(), result: { imported, updated, skipped, errors, retried } })
+  return finalResult
 }
 
 /** Collect story URLs from a category URL (HTML scrape, sitemap, or urls:// list) */
