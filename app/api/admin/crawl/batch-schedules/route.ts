@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
   if (!session || !['ADMIN', 'MOD'].includes(session.user.role as string))
     return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
 
-  const { name, categoryUrl, intervalMinutes, maxPages, maxStories, fromChapter, skipExisting } = await req.json()
+  const { name, categoryUrl, intervalMinutes, maxPages, maxStories, fromChapter, skipExisting, updateExisting, concurrency, chapterDelay, storyDelay, overwrite } = await req.json()
   if (!name || !categoryUrl) return NextResponse.json({ error: 'name và categoryUrl là bắt buộc' }, { status: 400 })
 
   const nextRunAt = new Date()
@@ -30,6 +30,11 @@ export async function POST(req: NextRequest) {
       maxStories: maxStories ?? 50,
       fromChapter: fromChapter ?? 1,
       skipExisting: skipExisting !== false,
+      updateExisting: updateExisting === true,
+      concurrency: concurrency ?? 3,
+      chapterDelay: chapterDelay ?? 500,
+      storyDelay: storyDelay ?? 2000,
+      overwrite: overwrite === true,
       nextRunAt,
     },
   })
@@ -46,7 +51,7 @@ export async function PATCH(req: NextRequest) {
   if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
   const data: any = {}
-  const allowed = ['name','categoryUrl','intervalMinutes','maxPages','maxStories','fromChapter','skipExisting','updateExisting','concurrency','chapterDelay','isActive']
+  const allowed = ['name','categoryUrl','intervalMinutes','maxPages','maxStories','fromChapter','skipExisting','updateExisting','overwrite','concurrency','chapterDelay','storyDelay','isActive']
   for (const key of allowed) {
     if (rest[key] !== undefined) data[key] = rest[key]
   }

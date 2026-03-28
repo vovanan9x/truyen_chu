@@ -367,14 +367,17 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
 
   log(`🚀 Bắt đầu: "${bs.name}"`)
   log(`🔗 URL: ${bs.categoryUrl}`)
-  log(`⚙️ Song song: ${bs.concurrency} ch. | Delay: ${bs.chapterDelay}ms | Trang: ${bs.maxPages} | Tối đa: ${bs.maxStories} truyện`)
+  log(`⚙️ Song song: ${bs.concurrency} ch. | Delay chương: ${bs.chapterDelay}ms | Delay truyện: ${bs.storyDelay}ms | Ghi đè: ${bs.overwrite ? 'Có' : 'Không'}`)
   console.log(`[BatchScheduler] \uD83D\uDE80 Running "${bs.name}": ${bs.categoryUrl}`)
+
+  // Create run history record
+  const run = await prisma.batchCrawlRun.create({ data: { scheduleId } })
 
   // Load proxy pool
   const crawlSettings = await getCrawlSettings()
   const proxyPool = crawlSettings.proxies ?? []
   if (proxyPool.length > 0) log(`🔗 Proxy pool: ${proxyPool.length} proxy`)
-  const crawlOpts = { concurrency: bs.concurrency, chapterDelay: bs.chapterDelay, proxyPool, scheduleId, log }
+  const crawlOpts = { concurrency: bs.concurrency, chapterDelay: bs.chapterDelay, proxyPool, scheduleId, log, overwrite: bs.overwrite }
 
   // ── Step 1: collect story URLs from category page ──────────────────────────
   log(`🔍 Đang quét URL truyện...`)
@@ -427,7 +430,9 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
 
   // ── Step 4: import new stories ─────────────────────────────────────────────
   let imported = 0
+  let updated = 0
   let errors = 0
+  const failedUrls: string[] = []
 
   for (const storyUrl of newUrls) {
     if (isBatchCancelled(scheduleId)) { log('🛑 Đã dừng'); break }
@@ -435,11 +440,12 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
       await importOneBatchStory(storyUrl, bs.fromChapter, crawlOpts)
       imported++
       log(`✅ (${imported}/${newUrls.length}) Import: ${storyUrl}`)
-      await sleep(2000)
+      await sleep(bs.storyDelay)
     } catch (e: any) {
       log(`❌ Import thất bại: ${storyUrl} — ${e?.message?.slice(0, 80)}`)
       console.error(`[BatchScheduler] \u274C (new) ${storyUrl}:`, e?.message)
       errors++
+      failedUrls.push(storyUrl)
     }
   }
 
@@ -450,24 +456,63 @@ export async function runBatchSchedule(scheduleId: string): Promise<{ imported: 
     const fromChapter = lastChapter + 1
     try {
       await importOneBatchStory(storyUrl, fromChapter, crawlOpts)
-      imported++
+      updated++
       log(`✅ Cập nhật từ ch.${fromChapter}: ${storyUrl}`)
-      await sleep(2000)
+      await sleep(bs.storyDelay)
     } catch (e: any) {
       log(`❌ Cập nhật thất bại: ${storyUrl} — ${e?.message?.slice(0, 80)}`)
       console.error(`[BatchScheduler] \u274C (update) ${storyUrl}:`, e?.message)
       errors++
+      failedUrls.push(storyUrl)
     }
   }
 
-  await prisma.batchCrawlSchedule.update({ where: { id: scheduleId }, data: { lastImported: imported } })
-  log(`🎉 Xong! Import: ${imported} | Lỗi: ${errors} | Bỏ qua: ${skipped}`)
-  console.log(`[BatchScheduler] \u2705 "${bs.name}" done: +${imported} imported, ${skipped} skipped, ${errors} errors`)
+  // ── Step 6: retry failed URLs (max 2 attempts) ───────────────────────────
+  let retried = 0
+  if (failedUrls.length > 0 && !isBatchCancelled(scheduleId)) {
+    log(`🔄 Retry ${failedUrls.length} URL lỗi...`)
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      const toRetry = [...failedUrls]
+      failedUrls.length = 0
+      await sleep(5000)
+      for (const storyUrl of toRetry) {
+        if (isBatchCancelled(scheduleId)) break
+        try {
+          await importOneBatchStory(storyUrl, bs.fromChapter, crawlOpts)
+          imported++
+          retried++
+          errors = Math.max(0, errors - 1)
+          log(`✅ Retry ${attempt}/2 thành công: ${storyUrl}`)
+          await sleep(bs.storyDelay)
+        } catch (e: any) {
+          log(`❌ Retry ${attempt}/2 thất bại: ${storyUrl} — ${e?.message?.slice(0, 60)}`)
+          failedUrls.push(storyUrl)
+        }
+      }
+      if (failedUrls.length === 0) break
+    }
+  }
+
+  const cancelled = isBatchCancelled(scheduleId)
+  await prisma.batchCrawlSchedule.update({ where: { id: scheduleId }, data: { lastImported: imported + updated } })
+  await prisma.batchCrawlRun.update({
+    where: { id: run.id },
+    data: { finishedAt: new Date(), imported, updated, skipped, errors, retried, status: cancelled ? 'cancelled' : 'done' }
+  })
+  log(`🎉 Xong! Import: ${imported} | Cập nhật: ${updated} | Lỗi: ${errors} | Retry: ${retried} | Bỏ qua: ${skipped}`)
+  console.log(`[BatchScheduler] \u2705 "${bs.name}" done: +${imported} imported, ${updated} updated, ${skipped} skipped, ${errors} errors, ${retried} retried`)
   return { imported, skipped, errors, storyUrls: [...newUrls, ...updateUrls] }
 }
 
-/** Collect story URLs from a category URL (HTML scrape or sitemap) */
+/** Collect story URLs from a category URL (HTML scrape, sitemap, or urls:// list) */
 async function collectCategoryUrls(categoryUrl: string, maxPages: number, maxStories: number): Promise<string[]> {
+  // ── urls:// mode: direct URL list ──────────────────────────────────────────
+  if (categoryUrl.startsWith('urls://')) {
+    const raw = categoryUrl.slice('urls://'.length)
+    const urls = raw.split(/[\n,]+/).map(u => u.trim()).filter(u => u.startsWith('http'))
+    return urls.slice(0, maxStories)
+  }
+
   const origin = new URL(categoryUrl).origin
   const isSitemap = /\.(xml|xml\.gz)(\?.*)?$/i.test(categoryUrl) || categoryUrl.toLowerCase().includes('sitemap')
 
@@ -547,9 +592,9 @@ async function collectCategoryUrls(categoryUrl: string, maxPages: number, maxSto
 async function importOneBatchStory(
   storyUrl: string,
   fromChapter: number,
-  opts: { concurrency: number; chapterDelay: number; proxyPool: string[]; scheduleId: string; log: (m: string) => void }
+  opts: { concurrency: number; chapterDelay: number; proxyPool: string[]; scheduleId: string; log: (m: string) => void; overwrite: boolean }
 ) {
-  const { concurrency, chapterDelay, proxyPool, scheduleId, log } = opts
+  const { concurrency, chapterDelay, proxyPool, scheduleId, log, overwrite } = opts
   const { adapter, cookies: siteCookies } = await getAdapterWithDbConfig(storyUrl)
 
   // Pick sticky proxy for this story
@@ -610,6 +655,13 @@ async function importOneBatchStory(
       data: genreIds.map(genreId => ({ storyId: story.id, genreId })),
       skipDuplicates: true,
     })
+  }
+
+  // Overwrite mode: delete all existing chapters before reimport
+  if (overwrite) {
+    const deleted = await prisma.chapter.deleteMany({ where: { storyId: story.id } })
+    if (deleted.count > 0) log(`  🗑️ Overwrite: đã xóa ${deleted.count} chương cũ`)
+    fromChapter = 1 // re-import all from ch.1
   }
 
   // Fetch chapter list

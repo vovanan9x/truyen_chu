@@ -153,7 +153,7 @@ export default function AdminCrawlerPage() {
   const [saveError, setSaveError] = useState('')
 
   // --- Batch schedule tab ---
-  interface BatchSchedule { id:string;name:string;categoryUrl:string;intervalMinutes:number;isActive:boolean;maxPages:number;maxStories:number;fromChapter:number;skipExisting:boolean;updateExisting:boolean;concurrency:number;chapterDelay:number;lastRunAt:string|null;nextRunAt:string|null;lastError:string|null;lastImported:number }
+  interface BatchSchedule { id:string;name:string;categoryUrl:string;intervalMinutes:number;isActive:boolean;maxPages:number;maxStories:number;fromChapter:number;skipExisting:boolean;updateExisting:boolean;overwrite:boolean;concurrency:number;chapterDelay:number;storyDelay:number;lastRunAt:string|null;nextRunAt:string|null;lastError:string|null;lastImported:number }
   const [batchSchedules, setBatchSchedules] = useState<BatchSchedule[]>([])
   const [editingBatch, setEditingBatch] = useState<Partial<BatchSchedule>|null>(null)
   const [savingBatch, setSavingBatch] = useState(false)
@@ -161,6 +161,9 @@ export default function AdminCrawlerPage() {
   const [batchRunResult, setBatchRunResult] = useState<Record<string,{imported:number;skipped:number;errors:number}>>({}) 
   const [schedLogs, setSchedLogs] = useState<Record<string, string[]>>({})
   const schedLogSince = useRef<Record<string, number>>({})
+  const [scheduleRuns, setScheduleRuns] = useState<Record<string, {id:string;startedAt:string;finishedAt:string|null;imported:number;updated:number;skipped:number;errors:number;retried:number;status:string}[]>>({})
+  const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({})
+  const [urlListMode, setUrlListMode] = useState(false)
 
   // Poll logs every 2s while a batch schedule is running
   useEffect(() => {
@@ -1029,7 +1032,7 @@ export default function AdminCrawlerPage() {
                 <p className="font-bold flex items-center gap-2"><List className="w-4 h-4 text-primary"/> Lịch Batch Crawl</p>
                 <p className="text-xs text-muted-foreground mt-0.5">Tự động quét URL thể loại/sitemap để import truyện mới theo lịch</p>
               </div>
-              <button onClick={()=>setEditingBatch({name:'',categoryUrl:'',intervalMinutes:1440,maxPages:3,maxStories:50,fromChapter:1,skipExisting:true,isActive:true})}
+              <button onClick={()=>{ setEditingBatch({name:'',categoryUrl:'',intervalMinutes:1440,maxPages:3,maxStories:50,fromChapter:1,skipExisting:true,updateExisting:false,overwrite:false,concurrency:3,chapterDelay:500,storyDelay:2000,isActive:true}); setUrlListMode(false) }}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl gradient-primary text-white text-sm font-semibold hover:opacity-90">
                 <PlusCircle className="w-4 h-4"/> Thêm lịch batch
               </button>
@@ -1041,8 +1044,23 @@ export default function AdminCrawlerPage() {
                 <div className="grid sm:grid-cols-2 gap-3">
                   <div className="sm:col-span-2"><label className={labelCls}>Tên mô tả *</label>
                     <input value={editingBatch.name??''} onChange={e=>setEditingBatch(p=>({...p!,name:e.target.value}))} placeholder="Tiên Hiệp - TruyenFull" className={inputCls+' w-full'}/></div>
-                  <div className="sm:col-span-2"><label className={labelCls}>URL thể loại hoặc Sitemap *</label>
-                    <input value={editingBatch.categoryUrl??''} onChange={e=>setEditingBatch(p=>({...p!,categoryUrl:e.target.value}))} placeholder="https://truyenfull.vision/the-loai/tien-hiep/" className={inputCls+' w-full'}/></div>
+                  <div className="sm:col-span-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <label className={labelCls}>URL thể loại / Sitemap *</label>
+                      <button type="button" onClick={()=>{ setUrlListMode(m=>!m); setEditingBatch(p=>({...p!,categoryUrl:''})) }}
+                        className="text-xs text-primary hover:underline">
+                        {urlListMode ? '← Dùng URL thể loại' : '📋 Nhập danh sách URL'}
+                      </button>
+                    </div>
+                    {urlListMode ? (
+                      <textarea rows={5} value={(editingBatch.categoryUrl??'').replace(/^urls:\/\//, '')}
+                        onChange={e=>setEditingBatch(p=>({...p!,categoryUrl:'urls://'+e.target.value}))}
+                        placeholder={"https://site.com/truyen-1/\nhttps://site.com/truyen-2/\nhttps://site.com/truyen-3/"}
+                        className={inputCls+' w-full resize-y font-mono text-xs'}/>
+                    ) : (
+                      <input value={editingBatch.categoryUrl??''} onChange={e=>setEditingBatch(p=>({...p!,categoryUrl:e.target.value}))} placeholder="https://truyenfull.vision/the-loai/tien-hiep/" className={inputCls+' w-full'}/>
+                    )}
+                  </div>
                   <div><label className={labelCls}>Chu kỳ</label>
                     <select value={editingBatch.intervalMinutes??1440} onChange={e=>setEditingBatch(p=>({...p!,intervalMinutes:+e.target.value}))} className={inputCls+' w-full'}>
                       <option value={60}>1 giờ</option><option value={360}>6 giờ</option><option value={720}>12 giờ</option>
@@ -1056,8 +1074,10 @@ export default function AdminCrawlerPage() {
                     <input type="number" min={1} value={editingBatch.fromChapter??1} onChange={e=>setEditingBatch(p=>({...p!,fromChapter:+e.target.value}))} className={inputCls+' w-full'}/></div>
                   <div><label className={labelCls}>Song song (concurrency)</label>
                     <input type="number" min={1} max={10} value={editingBatch.concurrency??3} onChange={e=>setEditingBatch(p=>({...p!,concurrency:+e.target.value}))} className={inputCls+' w-full'}/></div>
-                  <div><label className={labelCls}>Delay giữa batch (ms)</label>
+                  <div><label className={labelCls}>Delay giữa batch chương (ms)</label>
                     <input type="number" min={100} max={5000} step={100} value={editingBatch.chapterDelay??500} onChange={e=>setEditingBatch(p=>({...p!,chapterDelay:+e.target.value}))} className={inputCls+' w-full'}/></div>
+                  <div><label className={labelCls}>Delay giữa truyện (ms)</label>
+                    <input type="number" min={500} max={30000} step={500} value={editingBatch.storyDelay??2000} onChange={e=>setEditingBatch(p=>({...p!,storyDelay:+e.target.value}))} className={inputCls+' w-full'}/></div>
                   <div className="flex items-end pb-2.5">
                     <label className="flex items-center gap-2 text-sm cursor-pointer">
                       <input type="checkbox" checked={editingBatch.skipExisting!==false} onChange={e=>setEditingBatch(p=>({...p!,skipExisting:e.target.checked}))} className="accent-primary w-4 h-4"/>
@@ -1068,6 +1088,12 @@ export default function AdminCrawlerPage() {
                     <label className="flex items-center gap-2 text-sm cursor-pointer">
                       <input type="checkbox" checked={editingBatch.updateExisting===true} onChange={e=>setEditingBatch(p=>({...p!,updateExisting:e.target.checked}))} className="accent-primary w-4 h-4"/>
                       <span>Cập nhật chương mới cho truyện đã có <span className="text-xs text-muted-foreground">(crawl từ chương cuối)</span></span>
+                    </label>
+                  </div>
+                  <div className="flex items-end pb-2.5">
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                      <input type="checkbox" checked={editingBatch.overwrite===true} onChange={e=>setEditingBatch(p=>({...p!,overwrite:e.target.checked}))} className="accent-primary w-4 h-4"/>
+                      <span>Ghi đè <span className="text-xs text-muted-foreground">(xóa chương cũ, crawl lại từ đầu)</span></span>
                     </label>
                   </div>
                 </div>
@@ -1155,6 +1181,62 @@ export default function AdminCrawlerPage() {
                         </div>
                       </div>
                     )}
+                    {/* Run history panel */}
+                    <div className="mt-2">
+                      <button
+                        className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+                        onClick={async()=>{
+                          const open = !expandedRuns[bs.id]
+                          setExpandedRuns(prev=>({...prev,[bs.id]:open}))
+                          if(open && !scheduleRuns[bs.id]) {
+                            const res = await fetch(`/api/admin/crawl/batch-schedules/runs?id=${bs.id}`)
+                            if(res.ok) { const d = await res.json(); setScheduleRuns(prev=>({...prev,[bs.id]:d.runs})) }
+                          }
+                        }}
+                      >
+                        <ChevronDown className={`w-3 h-3 transition-transform ${expandedRuns[bs.id]?'rotate-180':''}`}/>
+                        Lịch sử chạy
+                      </button>
+                      {expandedRuns[bs.id] && (
+                        <div className="mt-2 rounded-xl border border-border overflow-hidden">
+                          {!scheduleRuns[bs.id] ? (
+                            <div className="py-3 text-center text-xs text-muted-foreground">Đang tải...</div>
+                          ) : scheduleRuns[bs.id].length===0 ? (
+                            <div className="py-3 text-center text-xs text-muted-foreground">Chưa có lịch sử</div>
+                          ) : (
+                            <table className="w-full text-xs">
+                              <thead><tr className="bg-muted/40 border-b border-border">
+                                <th className="text-left px-3 py-2 font-medium text-muted-foreground">Thời gian</th>
+                                <th className="text-center px-2 py-2 font-medium text-muted-foreground">TT</th>
+                                <th className="text-center px-2 py-2 font-medium text-muted-foreground">Import</th>
+                                <th className="text-center px-2 py-2 font-medium text-muted-foreground">Cập nhật</th>
+                                <th className="text-center px-2 py-2 font-medium text-muted-foreground">Lỗi</th>
+                                <th className="text-center px-2 py-2 font-medium text-muted-foreground">Retry</th>
+                              </tr></thead>
+                              <tbody className="divide-y divide-border/50">
+                                {scheduleRuns[bs.id].map(r=>(
+                                  <tr key={r.id} className="hover:bg-muted/20">
+                                    <td className="px-3 py-1.5 text-muted-foreground">{new Date(r.startedAt).toLocaleString('vi-VN',{dateStyle:'short',timeStyle:'short'})}</td>
+                                    <td className="px-2 py-1.5 text-center">
+                                      <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${
+                                        r.status==='done'?'bg-green-100 text-green-700':
+                                        r.status==='running'?'bg-blue-100 text-blue-700':
+                                        r.status==='cancelled'?'bg-gray-100 text-gray-600':
+                                        'bg-red-100 text-red-700'
+                                      }`}>{r.status==='done'?'✅':r.status==='running'?'⏳':r.status==='cancelled'?'⛔':'❌'}</span>
+                                    </td>
+                                    <td className="px-2 py-1.5 text-center text-green-600 font-medium">{r.imported>0?`+${r.imported}`:'-'}</td>
+                                    <td className="px-2 py-1.5 text-center text-blue-600">{r.updated>0?`+${r.updated}`:'-'}</td>
+                                    <td className="px-2 py-1.5 text-center text-destructive">{r.errors>0?r.errors:'-'}</td>
+                                    <td className="px-2 py-1.5 text-center text-amber-600">{r.retried>0?r.retried:'-'}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
