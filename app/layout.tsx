@@ -40,6 +40,16 @@ export default async function RootLayout({ children }: { children: React.ReactNo
 
   return (
     <html lang="vi" suppressHydrationWarning>
+      <head>
+        {/* Favicon trực tiếp — reliable hơn Metadata API với external URL */}
+        {s.site_favicon && (
+          <>
+            <link rel="icon" href={s.site_favicon} />
+            <link rel="shortcut icon" href={s.site_favicon} />
+            <link rel="apple-touch-icon" href={s.site_favicon} />
+          </>
+        )}
+      </head>
       <body>
         <Providers>{children}</Providers>
         {gaId && (
