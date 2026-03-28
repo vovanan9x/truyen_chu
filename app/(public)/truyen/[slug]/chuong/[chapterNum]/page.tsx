@@ -1,7 +1,6 @@
 import { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import sanitizeHtml from 'sanitize-html'
 import { prisma } from '@/lib/prisma'
 import { getSiteSettings, isAdEnabled, getAdCode } from '@/lib/site-settings'
 import ReaderWrapper from '@/components/reader/ReaderWrapper'
@@ -11,10 +10,17 @@ import ReportButton from '@/components/reader/ReportButton'
 import CommentSection from '@/components/story/CommentSection'
 import AdBanner from '@/components/ads/AdBanner'
 
-// Allowed tags for chapter HTML content — strip scripts, iframes, etc.
-const READER_ALLOWED_TAGS = ['p','br','div','span','strong','em','b','i','u','h1','h2','h3','h4','h5','h6','ul','ol','li','blockquote']
-function sanitizeChapter(html: string) {
-  return sanitizeHtml(html, { allowedTags: READER_ALLOWED_TAGS, allowedAttributes: { '*': ['class'] }, disallowedTagsMode: 'discard' })
+// Simple server-side HTML sanitizer — no external deps needed
+// Strips dangerous tags (script, iframe, style, object) and on* event handlers
+function sanitizeChapter(html: string): string {
+  return (html ?? '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')      // strip scripts
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')      // strip iframes
+    .replace(/<style[\s\S]*?<\/style>/gi, '')        // strip style blocks
+    .replace(/<object[\s\S]*?<\/object>/gi, '')      // strip objects
+    .replace(/<embed[\b\s][\s\S]*?\/>/gi, '')        // strip embeds
+    .replace(/\son\w+\s*=\s*(["'])[\s\S]*?\1/gi, '') // strip on* handlers
+    .replace(/javascript:\s*/gi, '')                 // strip javascript: URIs
 }
 
 export async function generateMetadata({
