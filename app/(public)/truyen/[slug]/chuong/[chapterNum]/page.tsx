@@ -1,6 +1,7 @@
 import { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
+import sanitizeHtml from 'sanitize-html'
 import { prisma } from '@/lib/prisma'
 import { getSiteSettings, isAdEnabled, getAdCode } from '@/lib/site-settings'
 import ReaderWrapper from '@/components/reader/ReaderWrapper'
@@ -9,6 +10,12 @@ import ChapterListDrawer from '@/components/reader/ChapterListDrawer'
 import ReportButton from '@/components/reader/ReportButton'
 import CommentSection from '@/components/story/CommentSection'
 import AdBanner from '@/components/ads/AdBanner'
+
+// Allowed tags for chapter HTML content — strip scripts, iframes, etc.
+const READER_ALLOWED_TAGS = ['p','br','div','span','strong','em','b','i','u','h1','h2','h3','h4','h5','h6','ul','ol','li','blockquote']
+function sanitizeChapter(html: string) {
+  return sanitizeHtml(html, { allowedTags: READER_ALLOWED_TAGS, allowedAttributes: { '*': ['class'] }, disallowedTagsMode: 'discard' })
+}
 
 export async function generateMetadata({
   params,
@@ -143,10 +150,10 @@ export default async function ChapterPage({
         </div>
       )}
 
-      {/* Reader content */}
+      {/* Reader content — content sanitized server-side before passing to client */}
       <div className="max-w-3xl mx-auto px-4 pb-28">
         <ReaderWrapper
-          content={chapter.content}
+          content={sanitizeChapter(chapter.content ?? '')}
           isLocked={chapter.isLocked}
           coinCost={chapter.coinCost}
           storySlug={chapter.story.slug}

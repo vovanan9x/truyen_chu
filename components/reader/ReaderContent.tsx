@@ -1,24 +1,10 @@
 'use client'
 
-import sanitizeHtml from 'sanitize-html'
-
 interface ReaderContentProps {
-  content: string
+  content: string  // Already sanitized server-side in chapter page
   isLocked: boolean
   fontSize: number
   fontFamily: 'serif' | 'sans-serif'
-}
-
-// Fix #4: Sanitize HTML content from crawled sources — allow safe tags only
-const ALLOWED_TAGS = ['p', 'br', 'div', 'span', 'strong', 'em', 'b', 'i', 'u', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote']
-const ALLOWED_ATTRS = { '*': ['class'] } // only allow class attribute
-
-function sanitize(html: string): string {
-  return sanitizeHtml(html, {
-    allowedTags: ALLOWED_TAGS,
-    allowedAttributes: ALLOWED_ATTRS,
-    disallowedTagsMode: 'discard',
-  })
 }
 
 // Detect if content is HTML or plain text
@@ -41,13 +27,11 @@ export default function ReaderContent({ content, isLocked, fontSize, fontFamily 
   }
 
   if (isHtml) {
+    // Content is already sanitized server-side (sanitize-html in chapter page.tsx)
     const totalLen = content.length
     const previewLen = isLocked ? Math.ceil(totalLen * 0.2) : totalLen
-
-    // Fix #4: Sanitize before rendering — strip scripts, iframes, onclick, etc.
-    const cleanContent = sanitize(content)
-    const previewHtml = cleanContent.slice(0, previewLen)
-    const lockedHtml = isLocked ? cleanContent.slice(previewLen) : ''
+    const previewHtml = content.slice(0, previewLen)
+    const lockedHtml = isLocked ? content.slice(previewLen) : ''
 
     return (
       <div className="relative">
